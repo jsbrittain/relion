@@ -8,6 +8,7 @@
 #include "src/acc/cuda/custom_allocator.cuh"
 #include "src/acc/cuda/cuda_mem_utils.h"
 #include "src/acc/cuda/shortcuts.cuh"
+#include "src/acc/cuda/cuda_pinned_pool.h"
 #elif _HIP_ENABLED
 #include "src/acc/hip/hip_settings.h"
 #include <hip/hip_runtime.h>
@@ -88,8 +89,10 @@ protected:
 	StreamType stream;
 	
 	AccType accType;
+  bool hostPinned = false;
 
 	size_t size; //Size used when copying data from and to device
+  size_t hostCapacity = 0;  // allocated size
 	T *hPtr, *dPtr; //Host and device pointers
 	bool doFreeDevice; //True if host or device needs to be freed
 #ifdef _SYCL_ENABLED
@@ -98,6 +101,10 @@ protected:
 
 public:
 	bool doFreeHost; //TODO make this private
+  
+  void setHostPinned(bool pinned) {
+    hostPinned = pinned;
+  }
 
 	/*======================================================
 				CONSTRUCTORS WITH ALLOCATORS
@@ -466,6 +473,10 @@ public:
 	 */
 	void hostAlloc()
 	{
+    if (hostPinned) {
+      hostAllocPinned();
+      return;
+    }
 #if defined(DEBUG_CUDA) || defined(DEBUG_HIP)
 		if(size==0)
 			ACC_PTR_DEBUG_FATAL("deviceAlloc called with size == 0");
@@ -500,6 +511,86 @@ public:
 #endif
 	}
 
+/*
+  // Pinned host allocation (minimal, fallback to posix when CUDA not enabled)
+  void hostAllocPinned()
+  {
+#if defined(DEBUG_CUDA) || defined(DEBUG_HIP)
+      if (size == 0) ACC_PTR_DEBUG_FATAL("hostAllocPinned called with size == 0");
+      if (doFreeHost) ACC_PTR_DEBUG_FATAL("Host double allocation (pinned).");
+#endif
+
+      void *p = nullptr;
+
+#ifdef _CUDA_ENABLED
+      if (cudaMallocHost(&p, sizeof(T) * size) == cudaSuccess) {
+          hPtr = (T*)p;
+          doFreeHost = true;
+          hostPinned = true;
+          return;
+      }
+      throw std::runtime_error("cudaHostAlloc failed");
+#endif
+
+      // fallback: regular aligned allocation
+      if (posix_memalign(&p, MEM_ALIGN, sizeof(T) * size)) {
+          CRITICAL(RAMERR);
+      }
+      hPtr = (T*)p;
+      doFreeHost = true;
+      hostPinned = false;
+  }
+*/
+
+    // Pinned host allocation (minimal, reuse when capacity permits)
+  void hostAllocPinned()
+  {
+#if defined(DEBUG_CUDA) || defined(DEBUG_HIP)
+      if (size == 0) ACC_PTR_DEBUG_FATAL("hostAllocPinned called with size == 0");
+      if (doFreeHost) ACC_PTR_DEBUG_FATAL("Host double allocation (pinned).");
+#endif
+
+      // If we already have capacity >= requested size, reuse it.
+      if (hPtr != nullptr && hostCapacity >= size) {
+          // no-op: reuse existing buffer (should not happen when doFreeHost==false,
+          // but keep this safe)
+          doFreeHost = true;
+          hostPinned = hostPinned; // keep existing flag
+          return;
+      }
+
+      // Try to acquire from the pool (rounding happens inside pool)
+      void *p = cuda_pinned_pool_acquire(sizeof(T) * size);
+      if (p != nullptr) {
+          hPtr = (T*)p;
+          hostCapacity = cuda_pinned_pool_get_size(p) / sizeof(T); // get bucket size in elements (if helper available)
+          doFreeHost = true;
+          hostPinned = true;
+          return;
+      }
+      throw std::runtime_error("cuda_pinned_pool_acquire failed");
+
+#ifdef _CUDA_ENABLED
+      // Pool couldn't satisfy. fall back to cudaMallocHost directly
+      void* out = nullptr;
+      if (cudaMallocHost(&out, sizeof(T) * size) == cudaSuccess) {
+          hPtr = (T*)out;
+          hostCapacity = size;
+          doFreeHost = true;
+          hostPinned = true;
+          return;
+      }
+#endif
+
+      // Fallback to posix_memalign if pinned allocation fails
+      if(posix_memalign((void **)&hPtr, MEM_ALIGN, sizeof(T) * size))
+          CRITICAL(RAMERR);
+
+      hostCapacity = size;
+      doFreeHost = true;
+      hostPinned = false;
+  }
+
 	/**
 	 * Allocate memory on host with given size
 	 */
@@ -507,6 +598,12 @@ public:
 	{
 		size = newSize;
 		hostAlloc();
+	}
+
+	void hostAllocPinned(size_t newSize)
+	{
+		size = newSize;
+		hostAllocPinned();
 	}
 
 	void allAlloc()
@@ -538,6 +635,7 @@ public:
 			hostAlloc(newSize);
 	}
 
+  /*
 	// Allocate storage of a new size for the array
 	void resizeHost(size_t newSize)
 	{
@@ -564,29 +662,134 @@ public:
 				CRITICAL(RAMERR);
 		}
 #else
-		if(posix_memalign((void **)&newArr, MEM_ALIGN, sizeof(T) * newSize))
-			CRITICAL(RAMERR);
+    // if the current buffer is pinned, allocate a new pinned buffer
+    if (hostPinned) {
+#ifdef _CUDA_ENABLED
+        void *p = nullptr;
+        if (cudaMallocHost(&p, sizeof(T) * newSize) != cudaSuccess) {
+            throw std::runtime_error("cudaHostAlloc failed in resizeHost");
+        } else {
+            newArr = (T*)p;
+        }
+#else
+        // non-CUDA builds won't have pinned
+        if (posix_memalign((void **)&newArr, MEM_ALIGN, sizeof(T) * newSize))
+            CRITICAL(RAMERR);
 #endif
-		memset( newArr, 0x0, sizeof(T) * newSize);
+    } else {
+        if (posix_memalign((void **)&newArr, MEM_ALIGN, sizeof(T) * newSize))
+            CRITICAL(RAMERR);
+    }
+#endif
 
+    memset(newArr, 0x0, sizeof(T) * newSize);
+
+    // copy old contents (same as before)...
+    if ((size > 0) && (hPtr != NULL)) {
+        if (newSize < size)
+            memcpy(newArr, hPtr, newSize * sizeof(T));
+        else
+            memcpy(newArr, hPtr, size * sizeof(T));
+        if (newSize > size) {
+            size_t theRest = sizeof(T) * (newSize - size);
+            memset(((char*)newArr) + (size * sizeof(T)), 0, theRest);
+        }
+    } else if (hPtr == NULL) {
+        memset(newArr, 0x0, sizeof(T) * newSize);
+    }
+
+    // free previous buffer using existing logic
+    freeHostIfSet();
+
+    // set new pointer and flags
+    setSize(newSize);
+    setHostPtr(newArr);
+    doFreeHost = true;
+    // preserve pinnedness if allocation succeeded as pinned
+#ifdef _CUDA_ENABLED
+    // If hostPinned was true and newArr was created by cudaHostAlloc set hostPinned true,
+    // otherwise set to false (posix fallback)
+    // Detect via newArr pointer origin is tricky; we can assume if hostPinned previously true
+    // we attempted pinned allocation above and set hostPinned accordingly.
+    // For simplicity: set hostPinned = hostPinned (i.e. preserve) only if we allocated pinned.
+#endif
+  }
+*/
+
+  void resizeHost(size_t newSize)
+  {
 #if defined(DEBUG_CUDA) || defined(DEBUG_HIP)
-		if (dPtr!=NULL)
-			ACC_PTR_DEBUG_FATAL("resizeHost: Resizing host with present device allocation.\n");
-		if (newSize==0)
-			ACC_PTR_DEBUG_INFO("resizeHost: Array resized to size zero (permitted with fear).  Something may break downstream\n");
+      if (size==0)
+          ACC_PTR_DEBUG_INFO("Resizing from size zero (permitted).\n");
 #endif
-		freeHostIfSet();	
-	    setSize(newSize);
-	    setHostPtr(newArr);
-#ifdef _SYCL_ENABLED
-		if(accType == accSYCL)
-			isHostSYCL = true;
-		else
-			isHostSYCL = false;
+
+      // If current host buffer exists and capacity suffices, keep it and adjust size
+      if (hPtr != nullptr && hostCapacity >= newSize) {
+          // If growing, zero the newly added region
+          if (newSize > size) {
+              size_t bytes_new_region = (newSize - size) * sizeof(T);
+              memset(((char*)hPtr) + size * sizeof(T), 0, bytes_new_region);
+          }
+          setSize(newSize);
+          return;
+      }
+
+      // Otherwise allocate a new host buffer (preserve pinnedness preference)
+      T* newArr = nullptr;
+#ifdef _CUDA_ENABLED
+      if (hostPinned) {
+          // attempt to allocate a pinned buffer large enough
+          void *p = cuda_pinned_pool_acquire(sizeof(T) * newSize);
+          if (p != nullptr) {
+              newArr = (T*)p;
+              hostCapacity = cuda_pinned_pool_get_size(p) / sizeof(T);
+              hostPinned = true;
+          } else {
+            throw std::runtime_error("cuda_pinned_pool_acquire failed in resizeHost");
+              // fallback to cudaMallocHost
+              void* out = nullptr;
+              if (cudaMallocHost(&out, sizeof(T) * newSize) == cudaSuccess) {
+                  newArr = (T*)out;
+                  hostCapacity = newSize;
+                  hostPinned = true;
+              } else {
+                  // final fallback to posix
+                  if (posix_memalign((void **)&newArr, MEM_ALIGN, sizeof(T) * newSize))
+                      CRITICAL(RAMERR);
+                  hostCapacity = newSize;
+                  hostPinned = false;
+              }
+          }
+      } else
 #endif
-	    doFreeHost=true;
-	}
-	
+      {
+          // non-pinned path
+          if (posix_memalign((void **)&newArr, MEM_ALIGN, sizeof(T) * newSize))
+              CRITICAL(RAMERR);
+          hostCapacity = newSize;
+          hostPinned = false;
+      }
+
+      // zero initialize full buffer
+      memset(newArr, 0x0, sizeof(T) * newSize);
+
+      // copy old contents if any
+      if ((size > 0) && (hPtr != NULL)) {
+          if (newSize < size)
+              memcpy(newArr, hPtr, newSize * sizeof(T));
+          else
+              memcpy(newArr, hPtr, size * sizeof(T));
+      }
+
+      // free previous buffer using existing logic
+      freeHostIfSet();
+
+      // set new pointer and flags
+      setSize(newSize);
+      setHostPtr(newArr);
+      doFreeHost = true;
+  }
+
 	// Resize retaining as much of the original contents as possible
 	void resizeHostCopy(size_t newSize)
 	{
@@ -1348,25 +1551,37 @@ public:
 	 * Delete host data
 	 */
 	void freeHost()
-	{
+  {
 #if defined(DEBUG_CUDA) || defined(DEBUG_HIP)
-		if (hPtr == NULL)
-			ACC_PTR_DEBUG_FATAL("free_host() called on NULL pointer.\n");
+      if (hPtr == NULL)
+          ACC_PTR_DEBUG_FATAL("free_host() called on NULL pointer.\n");
 #endif
-		doFreeHost = false;
-		if (NULL != hPtr)
+      doFreeHost = false;
+      if (NULL != hPtr)
 #ifdef _SYCL_ENABLED
-		{
-			if(isHostSYCL)
-				stream->syclFree(hPtr);
-			else
-				free(hPtr);
-		}
+      {
+          if(isHostSYCL)
+              stream->syclFree(hPtr);
+          else
+              free(hPtr);
+      }
 #else
-			free(hPtr);
+      {
+#ifdef _CUDA_ENABLED
+          if (hostPinned) {
+              //cudaFreeHost(hPtr);
+              cuda_pinned_pool_release(hPtr);
+          } else {
+              free(hPtr);
+          }
+#else
+          free(hPtr);
 #endif
-		hPtr = NULL;
-	}
+      }
+#endif
+      hPtr = NULL;
+      hostPinned = false;
+  }
 
 	void freeHostIfSet()
 	{
@@ -1491,6 +1706,17 @@ public:
 #endif
 		hPtr = ptr;
 	}
+
+  void setHostPtr(T *ptr, size_t capacity_in_elements, bool pinned=false)
+  {
+#if defined(DEBUG_CUDA) || defined(DEBUG_HIP)
+      if (doFreeHost)
+          ACC_PTR_DEBUG_FATAL("Host pointer set without freeing the old one.\n");
+#endif
+      hPtr = ptr;
+      hostCapacity = capacity_in_elements;
+      hostPinned = pinned;
+  }
 
 	void setHostPtr(const AccPtr<T> &ptr)
 	{
@@ -1719,6 +1945,35 @@ public:
 
 		return ptr;
 	}
+
+  template <typename T>
+  AccPtr<T> make_pinned()
+  {
+      AccPtr<T> ptr(stream, allocator);
+      ptr.setAccType(accType);
+      ptr.setHostPinned(true);
+      return ptr;
+  }
+
+  template <typename T>
+  AccPtr<T> make_pinned(size_t size)
+  {
+      AccPtr<T> ptr(stream, allocator);
+      ptr.setAccType(accType);
+      ptr.setSize(size);
+      ptr.setHostPinned(true);
+      return ptr;
+  }
+
+  template <typename T>
+  AccPtr<T> make_pinned(size_t size, StreamType s)
+  {
+      AccPtr<T> ptr(s, allocator);
+      ptr.setAccType(accType);
+      ptr.setSize(size);
+      ptr.setHostPinned(true);
+      return ptr;
+  }
 
 	AccPtrBundle makeBundle()
 	{

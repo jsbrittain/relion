@@ -269,8 +269,8 @@ public:
 	IndexedDataArrayMask(AccPtrFactory ptrFactory) :
 		firstPos(), lastPos(), weightNum(), jobNum()
 	{
-		jobOrigin = ptrFactory.make<size_t>();
-		jobExtent = ptrFactory.make<size_t>();
+		jobOrigin = ptrFactory.make_pinned<size_t>();
+		jobExtent = ptrFactory.make_pinned<size_t>();
 	}
 	
 	void setNumberOfJobs(size_t newSize)
@@ -312,11 +312,11 @@ public:
 	
 	inline
 	 IndexedDataArray(AccPtrFactory ptrFactory):
-	 	weights(ptrFactory.make<XFLOAT>()),
-		rot_id(ptrFactory.make<size_t>()),
-		rot_idx(ptrFactory.make<size_t>()),
-		trans_idx(ptrFactory.make<size_t>()),
-		ihidden_overs(ptrFactory.make<size_t>())
+	 	weights(ptrFactory.make_pinned<XFLOAT>()),
+		rot_id(ptrFactory.make_pinned<size_t>()),
+		rot_idx(ptrFactory.make_pinned<size_t>()),
+		trans_idx(ptrFactory.make_pinned<size_t>()),
+		ihidden_overs(ptrFactory.make_pinned<size_t>())
 	{};
 
 	inline

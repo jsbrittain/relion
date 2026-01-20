@@ -243,6 +243,8 @@ endif(GUI)
 
 if (CUDA_FOUND)
 	file(GLOB REL_CUDA_SRC "${CMAKE_SOURCE_DIR}/src/acc/cuda/*.cu" "${CMAKE_SOURCE_DIR}/src/acc/cuda/cuda_kernels/*.cu" )
+    file(GLOB REL_CUDA_CPP_SRC "${CMAKE_SOURCE_DIR}/src/acc/cuda/*.cpp")
+    list(APPEND REL_CUDA_SRC ${REL_CUDA_CPP_SRC})
 	cuda_add_library(relion_gpu_util ${REL_CUDA_SRC})
 
 	if (${CMAKE_BUILD_TYPE_LOWER} STREQUAL "profiling")

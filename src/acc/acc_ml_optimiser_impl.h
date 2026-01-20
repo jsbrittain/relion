@@ -623,8 +623,8 @@ void getFourierTransformsAndCtfs(long int part_id,
 				AccPtr<XFLOAT> softMaskSum    = ptrFactory.make<XFLOAT>((size_t)SOFTMASK_BLOCK_SIZE);
 				AccPtr<XFLOAT> softMaskSum_bg = ptrFactory.make<XFLOAT>((size_t)SOFTMASK_BLOCK_SIZE);
 #else
-                AccPtr<XFLOAT> softMaskSum    = ptrFactory.make<XFLOAT>((size_t)SOFTMASK_BLOCK_SIZE, 0);
-                AccPtr<XFLOAT> softMaskSum_bg = ptrFactory.make<XFLOAT>((size_t)SOFTMASK_BLOCK_SIZE, 0);
+                AccPtr<XFLOAT> softMaskSum    = ptrFactory.make_pinned<XFLOAT>((size_t)SOFTMASK_BLOCK_SIZE, 0);
+                AccPtr<XFLOAT> softMaskSum_bg = ptrFactory.make_pinned<XFLOAT>((size_t)SOFTMASK_BLOCK_SIZE, 0);
 #endif
                 softMaskSum.accAlloc();
                 softMaskSum_bg.accAlloc();
@@ -708,7 +708,7 @@ void getFourierTransformsAndCtfs(long int part_id,
 #ifdef _SYCL_ENABLED
 			AccPtr<XFLOAT> spectrumAndXi2 = ptrFactory.make<XFLOAT>((size_t)((baseMLO->image_full_size[optics_group]/2+1)+1));
 #else
-            AccPtr<XFLOAT> spectrumAndXi2 = ptrFactory.make<XFLOAT>((size_t)((baseMLO->image_full_size[optics_group]/2+1)+1), 0); // last +1 is the Xi2, to remove an expensive memcpy
+            AccPtr<XFLOAT> spectrumAndXi2 = ptrFactory.make_pinned<XFLOAT>((size_t)((baseMLO->image_full_size[optics_group]/2+1)+1), 0); // last +1 is the Xi2, to remove an expensive memcpy
 #endif
             spectrumAndXi2.allAlloc();
             spectrumAndXi2.accInit(0);
@@ -1147,7 +1147,7 @@ void getAllSquaredDifferencesCoarse(
 	for (int exp_iclass = sp.iclass_min; exp_iclass <= sp.iclass_max; exp_iclass++)
 		allWeights_size += projectorPlans[exp_iclass*sp.nr_images + 0].orientation_num * sp.nr_trans*sp.nr_oversampled_trans;
 
-	AccPtr<XFLOAT> allWeights = ptrFactory.make<XFLOAT>(allWeights_size);
+	AccPtr<XFLOAT> allWeights = ptrFactory.make_pinned<XFLOAT>(allWeights_size);
 
 #ifdef _SYCL_ENABLED
 	allWeights.setStreamAccType(devAcc);
@@ -1174,9 +1174,9 @@ void getAllSquaredDifferencesCoarse(
 	size_t img_re_offset = 0*(size_t)image_size;
 	size_t img_im_offset = 1*(size_t)image_size;
 
-	AccPtr<XFLOAT> Fimg_ = ptrFactory.make<XFLOAT>((size_t)image_size*2);
-	AccPtr<XFLOAT> trans_xyz = ptrFactory.make<XFLOAT>((size_t)translation_num*3);
-	AccPtr<XFLOAT> corr_img = ptrFactory.make<XFLOAT>((size_t)image_size);
+	AccPtr<XFLOAT> Fimg_ = ptrFactory.make_pinned<XFLOAT>((size_t)image_size*2);
+	AccPtr<XFLOAT> trans_xyz = ptrFactory.make_pinned<XFLOAT>((size_t)translation_num*3);
+	AccPtr<XFLOAT> corr_img = ptrFactory.make_pinned<XFLOAT>((size_t)image_size);
 
 #ifdef _SYCL_ENABLED
 	Fimg_.setStreamAccType(devAcc);
@@ -1474,9 +1474,9 @@ void getAllSquaredDifferencesFine(
 	size_t img_re_offset = 0*(size_t)image_size;
 	size_t img_im_offset = 1*(size_t)image_size;
 
-	AccPtr<XFLOAT> Fimg_     = ptrFactory.make<XFLOAT>((size_t)image_size*2);
-	AccPtr<XFLOAT> trans_xyz = ptrFactory.make<XFLOAT>((size_t)translation_num*3);
-	AccPtr<XFLOAT> corr_img = ptrFactory.make<XFLOAT>((size_t)image_size);
+	AccPtr<XFLOAT> Fimg_     = ptrFactory.make_pinned<XFLOAT>((size_t)image_size*2);
+	AccPtr<XFLOAT> trans_xyz = ptrFactory.make_pinned<XFLOAT>((size_t)translation_num*3);
+	AccPtr<XFLOAT> corr_img = ptrFactory.make_pinned<XFLOAT>((size_t)image_size);
 
 #ifdef _SYCL_ENABLED
 	Fimg_.setStreamAccType(devAcc);
@@ -1599,7 +1599,7 @@ void getAllSquaredDifferencesFine(
 
 		CTOC(accMLO->timer,"kernel_init_1");
 
-		std::vector< AccPtr<XFLOAT> > eulers((size_t)(sp.iclass_max-sp.iclass_min+1), ptrFactory.make<XFLOAT>());
+		std::vector< AccPtr<XFLOAT> > eulers((size_t)(sp.iclass_max-sp.iclass_min+1), ptrFactory.make_pinned<XFLOAT>());
 
 		AccPtrBundle AllEulers = ptrFactory.makeBundle();
 #ifdef _SYCL_ENABLED
@@ -1929,10 +1929,10 @@ void convertAllSquaredDifferencesToWeights(unsigned exp_ipass,
 	deviceStream_t devAcc = accMLO->getSyclDevice();
 #endif
 	// Ready the "prior-containers" for all classes (remake every img_id)
-	AccPtr<XFLOAT>  pdf_orientation       = ptrFactory.make<XFLOAT>((size_t)((sp.iclass_max-sp.iclass_min+1) * sp.nr_dir * sp.nr_psi));
-	AccPtr<bool>    pdf_orientation_zeros = ptrFactory.make<bool>(pdf_orientation.getSize());
-	AccPtr<XFLOAT>  pdf_offset            = ptrFactory.make<XFLOAT>((size_t)((sp.iclass_max-sp.iclass_min+1)*sp.nr_trans));
-	AccPtr<bool>    pdf_offset_zeros      = ptrFactory.make<bool>(pdf_offset.getSize());
+	AccPtr<XFLOAT>  pdf_orientation       = ptrFactory.make_pinned<XFLOAT>((size_t)((sp.iclass_max-sp.iclass_min+1) * sp.nr_dir * sp.nr_psi));
+	AccPtr<bool>    pdf_orientation_zeros = ptrFactory.make_pinned<bool>(pdf_orientation.getSize());
+	AccPtr<XFLOAT>  pdf_offset            = ptrFactory.make_pinned<XFLOAT>((size_t)((sp.iclass_max-sp.iclass_min+1)*sp.nr_trans));
+	AccPtr<bool>    pdf_offset_zeros      = ptrFactory.make_pinned<bool>(pdf_offset.getSize());
 
 #if defined(_SYCL_ENABLED) && defined(USE_ONEDPL)
 	pdf_orientation.setStreamAccType(devAcc);
@@ -1954,7 +1954,7 @@ void convertAllSquaredDifferencesToWeights(unsigned exp_ipass,
 
 	// pdf_orientation is img_id-independent, so we keep it above img_id scope
 	CTIC(accMLO->timer,"get_orient_priors");
-	AccPtr<RFLOAT> pdfs				= ptrFactory.make<RFLOAT>((size_t)((sp.iclass_max-sp.iclass_min+1) * sp.nr_dir * sp.nr_psi));
+	AccPtr<RFLOAT> pdfs				= ptrFactory.make_pinned<RFLOAT>((size_t)((sp.iclass_max-sp.iclass_min+1) * sp.nr_dir * sp.nr_psi));
 	pdfs.allAlloc();
 
 	for (unsigned long exp_iclass = sp.iclass_min; exp_iclass <= sp.iclass_max; exp_iclass++)
@@ -2224,7 +2224,7 @@ void convertAllSquaredDifferencesToWeights(unsigned exp_ipass,
                         offset,
                         ipart_length);
 
-                AccPtr<XFLOAT> filtered = ptrFactory.make<XFLOAT>((size_t)unsorted_ipart.getSize());
+                AccPtr<XFLOAT> filtered = ptrFactory.make_pinned<XFLOAT>((size_t)unsorted_ipart.getSize());
 #if defined(_SYCL_ENABLED) && defined(USE_ONEDPL)
 				filtered.setStreamAccType(devAcc);
 #endif
@@ -2256,8 +2256,8 @@ void convertAllSquaredDifferencesToWeights(unsigned exp_ipass,
                 }
                 filtered.setSize(filteredSize);
 
-                AccPtr<XFLOAT> sorted =         ptrFactory.make<XFLOAT>((size_t)filteredSize);
-                AccPtr<XFLOAT> cumulative_sum = ptrFactory.make<XFLOAT>((size_t)filteredSize);
+                AccPtr<XFLOAT> sorted =         ptrFactory.make_pinned<XFLOAT>((size_t)filteredSize);
+                AccPtr<XFLOAT> cumulative_sum = ptrFactory.make_pinned<XFLOAT>((size_t)filteredSize);
 #if defined(_SYCL_ENABLED) && defined(USE_ONEDPL)
 				sorted.setStreamAccType(devAcc);
 				cumulative_sum.setStreamAccType(devAcc);
@@ -2319,7 +2319,7 @@ void convertAllSquaredDifferencesToWeights(unsigned exp_ipass,
                 if (baseMLO->mymodel.nr_bodies == 1)
                     DIRECT_A2D_ELEM(baseMLO->exp_metadata, op.metadata_offset, METADATA_NR_SIGN) = (RFLOAT) my_nr_significant_coarse_samples;
 
-                AccPtr<bool> Mcoarse_significant = ptrFactory.make<bool>(ipart_length);
+                AccPtr<bool> Mcoarse_significant = ptrFactory.make_pinned<bool>(ipart_length);
                 Mcoarse_significant.setHostPtr(&op.Mcoarse_significant.data[offset]);
 
                 CUSTOM_ALLOCATOR_REGION_NAME("CASDTW_SIG");
@@ -2382,10 +2382,10 @@ void convertAllSquaredDifferencesToWeights(unsigned exp_ipass,
 
                     IndexedDataArray thisClassPassWeights(PassWeights,FPCMasks[exp_iclass]);
 
-                    AccPtr<XFLOAT> pdf_orientation_class =       ptrFactory.make<XFLOAT>(sp.nr_dir*sp.nr_psi),
-                                   pdf_offset_class =            ptrFactory.make<XFLOAT>(sp.nr_trans);
-                    AccPtr<bool>   pdf_orientation_zeros_class = ptrFactory.make<bool>(sp.nr_dir*sp.nr_psi),
-                                   pdf_offset_zeros_class =      ptrFactory.make<bool>(sp.nr_trans);
+                    AccPtr<XFLOAT> pdf_orientation_class =       ptrFactory.make_pinned<XFLOAT>(sp.nr_dir*sp.nr_psi),
+                                   pdf_offset_class =            ptrFactory.make_pinned<XFLOAT>(sp.nr_trans);
+                    AccPtr<bool>   pdf_orientation_zeros_class = ptrFactory.make_pinned<bool>(sp.nr_dir*sp.nr_psi),
+                                   pdf_offset_zeros_class =      ptrFactory.make_pinned<bool>(sp.nr_trans);
 #if defined(_SYCL_ENABLED) && defined(USE_ONEDPL)
 					pdf_orientation_class.setStreamAccType(devAcc);
 					pdf_offset_class.setStreamAccType(devAcc);
@@ -2482,8 +2482,8 @@ void convertAllSquaredDifferencesToWeights(unsigned exp_ipass,
 			devAcc->waitAll();
 #endif
             size_t weightSize = PassWeights.weights.getSize();
-            AccPtr<XFLOAT> sorted =         ptrFactory.make<XFLOAT>((size_t)weightSize);
-            AccPtr<XFLOAT> cumulative_sum = ptrFactory.make<XFLOAT>((size_t)weightSize);
+            AccPtr<XFLOAT> sorted =         ptrFactory.make_pinned<XFLOAT>((size_t)weightSize);
+            AccPtr<XFLOAT> cumulative_sum = ptrFactory.make_pinned<XFLOAT>((size_t)weightSize);
 #if defined(_SYCL_ENABLED) && defined(USE_ONEDPL)
 			sorted.setStreamAccType(devAcc);
 			cumulative_sum.setStreamAccType(devAcc);
@@ -2642,7 +2642,7 @@ void storeWeightedSums(OptimisationParamters &op, SamplingParameters &sp,
     size_t otrans_x2y2z2 = 3*(size_t)nr_fake_classes*nr_transes;
 
     // Allocate space for all classes, so that we can pre-calculate data for all classes, copy in one operation, call kenrels on all classes, and copy back in one operation
-    AccPtr<XFLOAT>          oo_otrans = ptrFactory.make<XFLOAT>((size_t)nr_fake_classes*nr_transes*4);
+    AccPtr<XFLOAT>          oo_otrans = ptrFactory.make_pinned<XFLOAT>((size_t)nr_fake_classes*nr_transes*4);
 
     oo_otrans.allAlloc();
 
@@ -2755,8 +2755,8 @@ void storeWeightedSums(OptimisationParamters &op, SamplingParameters &sp,
     size_t offsetz_class = 2*(size_t)sumBlockNum;
     size_t sigma2_offset = 3*(size_t)sumBlockNum;
 
-    AccPtr<XFLOAT>                      p_weights = ptrFactory.make<XFLOAT>((size_t)sumBlockNum);
-    AccPtr<XFLOAT> p_thr_wsum_prior_offsetxyz_class = ptrFactory.make<XFLOAT>((size_t)sumBlockNum*4);
+    AccPtr<XFLOAT>                      p_weights = ptrFactory.make_pinned<XFLOAT>((size_t)sumBlockNum);
+    AccPtr<XFLOAT> p_thr_wsum_prior_offsetxyz_class = ptrFactory.make_pinned<XFLOAT>((size_t)sumBlockNum*4);
 
     p_weights.allAlloc();
     p_thr_wsum_prior_offsetxyz_class.allAlloc();
@@ -2950,7 +2950,7 @@ void storeWeightedSums(OptimisationParamters &op, SamplingParameters &sp,
 		size_t trans_y_offset = 1*(size_t)translation_num;
 		size_t trans_z_offset = 2*(size_t)translation_num;
 
-		AccPtr<XFLOAT> trans_xyz = ptrFactory.make<XFLOAT>((size_t)translation_num*3);
+		AccPtr<XFLOAT> trans_xyz = ptrFactory.make_pinned<XFLOAT>((size_t)translation_num*3);
 #ifdef _SYCL_ENABLED
 		trans_xyz.setStreamAccType(devAcc);
 #endif
@@ -3033,7 +3033,7 @@ void storeWeightedSums(OptimisationParamters &op, SamplingParameters &sp,
 			size_t re_nomask_offset = 2*(size_t)image_size;
 			size_t im_nomask_offset = 3*(size_t)image_size;
 
-			AccPtr<XFLOAT> Fimgs = ptrFactory.make<XFLOAT>(4*(size_t)image_size);
+			AccPtr<XFLOAT> Fimgs = ptrFactory.make_pinned<XFLOAT>(4*(size_t)image_size);
 #ifdef _SYCL_ENABLED
 			Fimgs.setStreamAccType(devAcc);
 #endif
@@ -3078,7 +3078,7 @@ void storeWeightedSums(OptimisationParamters &op, SamplingParameters &sp,
 				}
 			}
 
-			AccPtr<XFLOAT> ctfs = ptrFactory.make<XFLOAT>((size_t)image_size);
+			AccPtr<XFLOAT> ctfs = ptrFactory.make_pinned<XFLOAT>((size_t)image_size);
 #ifdef _SYCL_ENABLED
 			ctfs.setStreamAccType(devAcc);
 #endif
@@ -3101,7 +3101,7 @@ void storeWeightedSums(OptimisationParamters &op, SamplingParameters &sp,
 			                       MINVSIGMA
 			======================================================*/
 
-			AccPtr<XFLOAT> Minvsigma2s = ptrFactory.make<XFLOAT>((size_t)image_size);
+			AccPtr<XFLOAT> Minvsigma2s = ptrFactory.make_pinned<XFLOAT>((size_t)image_size);
 #ifdef _SYCL_ENABLED
 			Minvsigma2s.setStreamAccType(devAcc);
 #endif
@@ -3127,7 +3127,7 @@ void storeWeightedSums(OptimisationParamters &op, SamplingParameters &sp,
 			size_t XA_offset =  1*(size_t)(baseMLO->mymodel.nr_classes*image_size);
 			size_t sum_offset = 2*(size_t)(baseMLO->mymodel.nr_classes*image_size);
 
-			AccPtr<XFLOAT> wdiff2s    = ptrFactory.make<XFLOAT>(wdiff2s_buf);
+			AccPtr<XFLOAT> wdiff2s    = ptrFactory.make_pinned<XFLOAT>(wdiff2s_buf);
 #ifdef _SYCL_ENABLED
 			wdiff2s.setStreamAccType(devAcc);
 #endif
@@ -3139,12 +3139,12 @@ void storeWeightedSums(OptimisationParamters &op, SamplingParameters &sp,
 			CUSTOM_ALLOCATOR_REGION_NAME("BP_data");
 
 			// Loop from iclass_min to iclass_max to deal with seed generation in first iteration
-			AccPtr<XFLOAT> sorted_weights = ptrFactory.make<XFLOAT>((size_t)(ProjectionData.orientationNumAllClasses * translation_num));
+			AccPtr<XFLOAT> sorted_weights = ptrFactory.make_pinned<XFLOAT>((size_t)(ProjectionData.orientationNumAllClasses * translation_num));
 #ifdef _SYCL_ENABLED
 			sorted_weights.setStreamAccType(devAcc);
 #endif
 			sorted_weights.allAlloc();
-			std::vector<AccPtr<XFLOAT> > eulers(baseMLO->mymodel.nr_classes, ptrFactory.make<XFLOAT>());
+			std::vector<AccPtr<XFLOAT> > eulers(baseMLO->mymodel.nr_classes, ptrFactory.make_pinned<XFLOAT>());
 
 			unsigned long classPos = 0;
 		#ifdef _HIP_ENABLED
@@ -3838,7 +3838,7 @@ baseMLO->timer.toc(baseMLO->TIMING_ESP_DIFF2_B);
 
 				op.Mweight.resizeNoCp(1,1,1, weightsPerPart);
 
-				AccPtr<XFLOAT> Mweight = ptrFactory.make<XFLOAT>();
+				AccPtr<XFLOAT> Mweight = ptrFactory.make_pinned<XFLOAT>();
 
 				Mweight.setSize(weightsPerPart);
 				Mweight.setHostPtr(op.Mweight.data);
@@ -3913,7 +3913,7 @@ baseMLO->timer.toc(baseMLO->TIMING_ESP_DIFF2_D);
 				CTOC(timer,"getAllSquaredDifferencesFine");
 				FinePassWeights.weights.cpToHost();
 
-				AccPtr<XFLOAT> Mweight = ptrFactory.make<XFLOAT>(); //DUMMY
+				AccPtr<XFLOAT> Mweight = ptrFactory.make_pinned<XFLOAT>(); //DUMMY
 
 				CTIC(timer,"convertAllSquaredDifferencesToWeightsFine");
                 convertAllSquaredDifferencesToWeights<MlClass>(ipass, op, sp, baseMLO, myInstance, FinePassWeights, FinePassClassMasks, Mweight, ptrFactory, ibody);

@@ -5,6 +5,7 @@
 #ifdef _CUDA_ENABLED
 #include "src/acc/cuda/cuda_settings.h"
 #include <cuda_runtime.h>
+#include "src/acc/cuda/cuda_event_pool.h"
 #endif
 
 #include <signal.h>
@@ -78,7 +79,8 @@ public:
 			ptr = NULL;
 
 			if (readyEvent != 0)
-				DEBUG_HANDLE_ERROR(cudaEventDestroy(readyEvent));
+                cuda_event_pool_release(readyEvent);
+                readyEvent = 0;
 		}
 
 	public:
@@ -97,9 +99,23 @@ public:
 		inline
 		void markReadyEvent(cudaStream_t stream = 0)
 		{
-			//TODO add a debug warning if event already set
-			DEBUG_HANDLE_ERROR(cudaEventCreate(&readyEvent));
-			DEBUG_HANDLE_ERROR(cudaEventRecord(readyEvent, stream));
+			// If we already hold an event, return it before acquiring a fresh one
+            if (readyEvent != 0)
+            {
+                // release previous event back to pool; this prevents leaking events
+                cuda_event_pool_release(readyEvent);
+                readyEvent = 0;
+            }
+
+            // Acquire event from pool. If pool cannot provide one, fallback to create.
+            readyEvent = cuda_event_pool_acquire();
+            if (readyEvent == (cudaEvent_t)0)
+            {
+                // Fallback: create a new event as before
+                DEBUG_HANDLE_ERROR(cudaEventCreate(&readyEvent));
+            }
+            // Record on the caller-specified stream (default stream 0).
+            DEBUG_HANDLE_ERROR(cudaEventRecord(readyEvent, stream));
 		}
 
 		inline
@@ -435,9 +451,11 @@ private:
 		{
 			HANDLE_ERROR(cudaMalloc( (void**) &(first->ptr), totalSize));
 			cache = true;
+            cuda_event_pool_init(64 /* initial_capacity */, 0 /* max_capacity 0 = unlimited */);
 		}
-		else
+		else {
 			cache = false;
+        }
 	}
 
 	void _clear()
@@ -598,6 +616,7 @@ public:
 			Lock ml(&mutex);
 			_clear();
 		}
+        cuda_event_pool_shutdown();
 		omp_destroy_lock(&mutex);
 	}
 
