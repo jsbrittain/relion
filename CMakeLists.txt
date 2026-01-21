@@ -208,6 +208,8 @@ if(CUDA)
       endif()
       if(CUDA)
           add_definitions(-D_CUDA_ENABLED)
+          add_definitions(-DNEWMEM)
+          add_definitions(-DNDEBUG)
       endif()
     else(CUDA_FOUND)
         message(FATAL_ERROR "CUDA enabled but unlable to locate packages...")
@@ -656,6 +658,7 @@ endif()
 
 
 ADD_SUBDIRECTORY(src/apps)
+ADD_SUBDIRECTORY(src/t2/src/apps)  # requires NEWMEM to be set
 
 #message(STATUS "CUDA option = ${CUDA}")
 #message(STATUS "ALTCPU option = ${ALTCPU}")
