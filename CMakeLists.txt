@@ -208,8 +208,6 @@ if(CUDA)
       endif()
       if(CUDA)
           add_definitions(-D_CUDA_ENABLED)
-          add_definitions(-DNEWMEM)
-          add_definitions(-DNDEBUG)
       endif()
     else(CUDA_FOUND)
         message(FATAL_ERROR "CUDA enabled but unlable to locate packages...")
@@ -657,8 +655,17 @@ else()
 endif()
 
 
+# RELION apps
 # ADD_SUBDIRECTORY(src/apps)
-ADD_SUBDIRECTORY(src/t2/src/apps)  # requires NEWMEM to be set
+
+# RELION Refine (T2 variant)
+option(BUILD_T2 "Build RELION-T2" OFF)
+if (BUILD_T2)
+    message(STATUS "Building RELION Refine (T2 variant)")
+    add_definitions(-DNEWMEM)
+    add_definitions(-DNDEBUG)
+    ADD_SUBDIRECTORY(src/t2/src/apps)
+endif()
 
 #message(STATUS "CUDA option = ${CUDA}")
 #message(STATUS "ALTCPU option = ${ALTCPU}")
