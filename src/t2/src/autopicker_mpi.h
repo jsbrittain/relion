@@ -1,1 +1,0 @@
-../../autopicker_mpi.h
