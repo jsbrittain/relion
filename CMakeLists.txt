@@ -656,7 +656,7 @@ endif()
 
 
 # RELION apps
-# ADD_SUBDIRECTORY(src/apps)
+ADD_SUBDIRECTORY(src/apps)
 
 # RELION Refine (T2 variant)
 option(BUILD_T2 "Build RELION-T2" OFF)

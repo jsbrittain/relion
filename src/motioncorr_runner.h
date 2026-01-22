@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <algorithm>
 #include <src/time.h>
+#include "acc/settings.h"
 #include "src/metadata_table.h"
 #include "src/image.h"
 #include "src/micrograph_model.h"
