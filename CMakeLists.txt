@@ -657,7 +657,7 @@ else()
 endif()
 
 
-ADD_SUBDIRECTORY(src/apps)
+# ADD_SUBDIRECTORY(src/apps)
 ADD_SUBDIRECTORY(src/t2/src/apps)  # requires NEWMEM to be set
 
 #message(STATUS "CUDA option = ${CUDA}")
