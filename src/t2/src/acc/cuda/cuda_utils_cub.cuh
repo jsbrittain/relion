@@ -61,8 +61,8 @@ if (ptr.getAllocator() == NULL)
 	max_pair.cpToHost();
 	ptr.streamSync();
     
-    pin_free(temp_storage_size);
 	ptr.getAllocator()->free(alloc);
+    pin_free(temp_storage_size);
 
 	std::pair<int, T> pair;
 	pair.first = max_pair[0].key;
@@ -140,9 +140,9 @@ if (ptr.getAllocator() == NULL)
 
 	min_pair.cpToHost();
 	ptr.streamSync();
-    pin_free(temp_storage_size);
 	
     ptr.getAllocator()->free(alloc);
+    pin_free(temp_storage_size);
 
 	std::pair<int, T> pair;
 	pair.first = min_pair[0].key;
@@ -180,9 +180,9 @@ if (ptr.getAllocator() == NULL)
 
 	min_pair.cpToHost();
 	ptr.streamSync();
-    pin_free(temp_storage_size);
 
 	allocator->free((BYTE*)alloc_space,(*temp_storage_size));
+    pin_free(temp_storage_size);
 
 	std::pair<int, T> pair;
 	pair.first = min_pair[0].key;
@@ -220,9 +220,9 @@ if (ptr.getAllocator() == NULL)
 
 	max_val.cpToHost();
 	ptr.streamSync();
-    pin_free(temp_storage_size);
 
 	ptr.getAllocator()->free(alloc);
+    pin_free(temp_storage_size);
 
 	return max_val[0];
 }
@@ -291,9 +291,9 @@ if (ptr.getAllocator() == NULL)
     
 	min_val.cpToHost();
 	ptr.streamSync();
-    pin_free(temp_storage_size);
 
 	ptr.getAllocator()->free(alloc);
+    pin_free(temp_storage_size);
 
 	return min_val[0];
 }
@@ -363,9 +363,9 @@ if (ptr.getAllocator() == NULL)
 
 	val.cpToHost();
 	ptr.streamSync();
-    pin_free(temp_storage_size);
 
 	ptr.getAllocator()->free(alloc);
+    pin_free(temp_storage_size);
 
 	return val[0];
 }
@@ -399,8 +399,10 @@ if (ptr.getAllocator() == NULL)
 
 	val.cpToHost();
 	ptr.streamSync();
+
 	allocator->free((BYTE*)alloc_space,(*temp_storage_size));
     pin_free(temp_storage_size);
+
 	return val[0];
 }
 
@@ -569,9 +571,10 @@ if (in.getAllocator() == NULL)
 	DEBUG_HANDLE_ERROR(cub::DeviceSelect::If(alloc->getPtr(), (*temp_storage_size), ~in, ~out, ~num_selected_out, in.getSize(), select_op, stream));
 	num_selected_out.cpToHost();
 	DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
-    pin_free(temp_storage_size);
 
 	in.getAllocator()->free(alloc);
+    pin_free(temp_storage_size);
+
 	return num_selected_out[0];
 }
 
@@ -610,6 +613,7 @@ if (in.getAllocator() == NULL)
 
 	allocator->free((BYTE*)alloc_space,(*temp_storage_size));
     pin_free(temp_storage_size);
+
 	return num_selected_out[0];
 }
 
