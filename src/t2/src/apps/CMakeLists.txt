@@ -4,7 +4,6 @@ if(NOT DEFINED APPS_PREFIX)
 endif()
 
 set(RELION_LIB          "${APPS_PREFIX}relion_lib")
-set(RELION_GUI_LIB      "${APPS_PREFIX}relion_gui_lib")
 set(RELION_GPU_UTIL     "${APPS_PREFIX}relion_gpu_util")
 set(RELION_JAZ_GPU_UTIL "${APPS_PREFIX}relion_jaz_gpu_util")
 set(RELION_SYCL_UTIL    "${APPS_PREFIX}relion_sycl_util")
@@ -22,8 +21,6 @@ endif(NOT MKLFFT)
 find_path (X11_INCLUDES Xdbe.h)
 
 message(STATUS "CMAKE_BINARY_DIR:" ${CMAKE_BINARY_DIR})
-
-file(GLOB REL_GUI_SRC "${T2_SOURCE_DIR}/src/manualpicker.cpp" "${T2_SOURCE_DIR}/src/gui_*.cpp" "${T2_SOURCE_DIR}/src/displayer.cpp")
 
 # AUTOMATIC VERSIONING
 # Reference: https://stackoverflow.com/questions/1435953/how-can-i-pass-git-sha1-to-compiler-as-definition-using-cmake
@@ -48,11 +45,6 @@ else()
 	file(GLOB REL_SRC "${T2_SOURCE_DIR}/src/*.cpp" "${CMAKE_BINARY_DIR}/macros.cpp" "${T2_SOURCE_DIR}/src/*.c" "${T2_SOURCE_DIR}/src/acc/*.cpp" )
 	file(GLOB REL_SRC_H "${T2_SOURCE_DIR}/src/*.h" "${T2_SOURCE_DIR}/src/acc/*.h" ) 
 endif(ALTCPU)
-
-# Remove GUI files from ${RELION_LIB}
-foreach(GUI_SRC_FILE ${REL_GUI_SRC})
-	list(REMOVE_ITEM REL_SRC "${GUI_SRC_FILE}")
-endforeach()
 
 file(GLOB REL_JAZ_MATH_SRC "${T2_SOURCE_DIR}/src/jaz/math/*.cpp")
 file(GLOB REL_JAZ_MATH_H "${T2_SOURCE_DIR}/src/jaz/math/*.h")
@@ -129,16 +121,7 @@ if(RELION_TEST)
 	file(GLOB RELION_JAZ_EXPERIMENTAL_TARGETS "${T2_SOURCE_DIR}/src/jaz/scripts/*.cpp")
 endif(RELION_TEST)
 
-set(GUI_TARGETS maingui display manualpick)
-
 set(TORCH_TARGETS class_ranker)
-
-#--Remove apps using X11 if no GUI--
-if(NOT GUI)
-	foreach(TARGET ${GUI_TARGETS})
-		list(REMOVE_ITEM RELION_TARGETS "${T2_SOURCE_DIR}/src/apps/${TARGET}.cpp")
-	endforeach()
-endif(NOT GUI)
 
 #--Remove apps for testing--
 
@@ -151,7 +134,6 @@ endif(NOT RELION_TEST)
 
 # ${RELION_LIB} is STATIC or SHARED type based on BUILD_SHARED_LIBS=ON/OFF
 # ${RELION_LIB} only contains non-X11 parts
-# ${RELION_GUI_LIB} is where the X11 code is placed
 if(BUILD_SHARED_LIBS)
 	add_library(${RELION_LIB} SHARED
 		${REL_SRC} ${REL_SRC_H} ${REL_HP}
@@ -188,10 +170,6 @@ if(BUILD_SHARED_LIBS)
 		${REL_SPHERICAL_HARMONICS_SRC} ${REL_SPHERICAL_HARMONICS_H})
 
 	install(TARGETS ${RELION_LIB} LIBRARY DESTINATION lib)
-	if(GUI)
-		add_library(${RELION_GUI_LIB} SHARED ${REL_GUI_SRC} ${REL_SRC_H} ${REL_HP})
-		install(TARGETS ${RELION_GUI_LIB} LIBRARY DESTINATION lib)
-	endif(GUI)
 else()
 	add_library(${RELION_LIB} STATIC
 		${REL_SRC} ${REL_SRC_H} ${REL_HP}
@@ -226,10 +204,6 @@ else()
 		${REL_D3x3_SRC} ${REL_D3x3_H}
 		${REL_LBFGS_SRC} ${REL_LBFGS_H} 
 		${REL_SPHERICAL_HARMONICS_SRC} ${REL_SPHERICAL_HARMONICS_H})
-
-	if(GUI)
-		add_library(${RELION_GUI_LIB} STATIC ${REL_GUI_SRC} ${REL_SRC_H} ${REL_HP})
-	endif(GUI)
 endif()
 
 if(NOT MKLFFT)
@@ -241,14 +215,6 @@ if(NOT MKLFFT)
 		add_dependencies(${RELION_LIB} own_fftwf_lib)
 	endif()
 endif(NOT MKLFFT)
-
-if(GUI)
-	include_directories("${FLTK_INCLUDE_DIR}")
-	target_link_libraries(${RELION_GUI_LIB} ${RELION_LIB} ${FLTK_LIBRARIES})
-	if(BUILD_OWN_FLTK)
-		add_dependencies(${RELION_GUI_LIB} OWN_FLTK)
-	endif()
-endif(GUI)
 
 if (CUDA_FOUND)
 	file(GLOB REL_CUDA_SRC "${T2_SOURCE_DIR}/src/acc/cuda/*.cu" "${T2_SOURCE_DIR}/src/acc/cuda/cuda_kernels/*.cu" )
@@ -377,12 +343,6 @@ foreach (_target ${RELION_TARGETS})
 	                      XX_EXTENSIONS OFF
 	)
 	
-	list(FIND GUI_TARGETS ${_target} IS_GUI_TARGET)
-	if((NOT ${IS_GUI_TARGET} LESS 0) OR (${_target} STREQUAL "relion"))
-		add_dependencies(${_target} ${RELION_GUI_LIB})
-		target_link_libraries(${_target} ${RELION_GUI_LIB} ${FLTK_LIBRARIES} ${X11})
-	endif()
-
 	if(TIFF_FOUND)
 		target_link_libraries(${_target} ${TIFF_LIBRARIES})
 	endif()
@@ -390,68 +350,6 @@ foreach (_target ${RELION_TARGETS})
 	install (TARGETS ${_target} RUNTIME DESTINATION bin)
 
 endforeach()
-
-# # Python script for running pytorch is required for class_ranker along with torch model
-# if(FETCH_TORCH_MODELS)
-# 	add_dependencies(class_ranker copy_scripts class_ranker_model_file)
-# endif()
-
-# foreach (_target ${RELION_JAZ_SPA_TARGETS})
-# 	GET_FILENAME_COMPONENT(_target "relion_${_target}" NAME_WE)	
-# 	add_executable(${_target} ${T2_SOURCE_DIR}/src/jaz/single_particle/apps/${_target}.cpp)
-# 	set(LIB ${RELION_LIB})	
-#  	add_dependencies(${_target} ${RELION_LIB})	
-# 	set_target_properties(${_target} PROPERTIES PREFIX "relion_")
-# 	target_link_libraries(${_target} ${LIB} ${FFTW_LIBRARIES} ${EXTRA_LIBS} ${MPI_LIBRARIES} ${CMAKE_DL_LIBS})
-# 	set_target_properties(${_target} PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF	)
-	
-# 	if(TIFF_FOUND)
-# 		target_link_libraries(${_target} ${TIFF_LIBRARIES})
-# 	endif()
-
-# 	if (ALTCPU)
-# 		target_link_libraries(${_target} ${TBB_LIBRARIES})
-# 	endif(ALTCPU)
-	
-# 	install (TARGETS ${_target} RUNTIME DESTINATION bin)
-# endforeach()
-
-# # former Dynamite programs:
-# foreach (_target ${RELION_JAZ_TOMO_TARGETS})
-# 	GET_FILENAME_COMPONENT(_target "relion_tomo_${_target}" NAME_WE)	
-# 	add_executable(${_target} ${T2_SOURCE_DIR}/src/jaz/tomography/apps/${_target}.cpp)
-# 	set(LIB ${RELION_LIB})	
-#  	add_dependencies(${_target} ${RELION_LIB})	
-# 	set_target_properties(${_target} PROPERTIES PREFIX "relion_tomo_")
-# 	target_link_libraries(${_target} ${LIB} ${FFTW_LIBRARIES} ${EXTRA_LIBS} ${MPI_LIBRARIES} ${CMAKE_DL_LIBS})
-# 	set_target_properties(${_target} PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF	)
-	
-# 	if(TIFF_FOUND)
-# 		target_link_libraries(${_target} ${TIFF_LIBRARIES})
-# 	endif()
-	
-# 	install (TARGETS ${_target} RUNTIME DESTINATION bin)
-# endforeach()
-
-# foreach (_target ${RELION_JAZ_EXPERIMENTAL_TARGETS})
-# 	GET_FILENAME_COMPONENT(_target "relion_exp_${_target}" NAME_WE)	
-# 	add_executable(${_target} ${T2_SOURCE_DIR}/src/jaz/scripts/${_target}.cpp)		
-# 	set(LIB ${RELION_LIB})	
-#  	add_dependencies(${_target} ${RELION_LIB})	
-# 	set_target_properties(${_target} PROPERTIES PREFIX "relion_exp_")
-# 	target_link_libraries(${_target} ${LIB} ${FFTW_LIBRARIES} ${EXTRA_LIBS} ${MPI_LIBRARIES} ${CMAKE_DL_LIBS})
-# 	set_target_properties(${_target} PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF	)
-	
-# 	if(TIFF_FOUND)
-# 		target_link_libraries(${_target} ${TIFF_LIBRARIES})
-# 	endif()
-
-# 	if (ALTCPU)
-# 		target_link_libraries(${_target} ${TBB_LIBRARIES})
-# 	endif(ALTCPU)
-	
-# 	install (TARGETS ${_target} RUNTIME DESTINATION bin)
-# endforeach()
 
 FIND_PACKAGE( OpenMP REQUIRED)
 if(OPENMP_FOUND)
@@ -464,14 +362,3 @@ endif()
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c99")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
-
-#ADD_SUBDIRECTORY(pinned_allocator)
-#include_directories(pinned_allocator)
-
-# message("C Version: ${CMAKE_C_STANDARD}")
-# message("C++ Version: ${CMAKE_CXX_STANDARD}")
-
-# Set this flag to activate bounds checking in stl-vectors (incl. strings)
-# It is useful to do this periodically, as it catches 
-# difficult-to-see and rare-to-manifest bugs
-# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D_GLIBCXX_DEBUG")
