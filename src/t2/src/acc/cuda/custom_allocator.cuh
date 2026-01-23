@@ -1117,7 +1117,7 @@ public:
 					_printState();
 
 					fflush(stdout);
-					CRITICAL(ERRCUDACAOOM);
+					CRITICAL(ERRGPUCAOOM);
 				}
 			}
 
