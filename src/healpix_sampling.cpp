@@ -474,6 +474,62 @@ void HealpixSampling::addOneTranslation(
 		translations_z.push_back(offset_z);
 }
 
+// Resize the vectors to hold a specified number of translations.
+void HealpixSampling::resizeTranslation(
+	size_t num_translations, 
+	bool do_clear)
+{
+    if (do_clear)
+    {
+        translations_x.clear();
+        translations_y.clear();
+        translations_z.clear();
+    }
+
+    // Resize the vectors to the appropriate size
+    translations_x.resize(num_translations, 0.0);
+    translations_y.resize(num_translations, 0.0);
+    if (is_3d_trans)
+    {
+        translations_z.resize(num_translations, 0.0);
+    }
+}
+
+// Set the translation at a specific index.
+void HealpixSampling::setTranslation(
+	size_t index, 
+	RFLOAT offset_x, 
+	RFLOAT offset_y, 
+	RFLOAT offset_z,
+    bool do_helical_refine, 
+	RFLOAT rot_deg, 
+	RFLOAT tilt_deg, 
+	RFLOAT psi_deg)
+{
+    if (index < translations_x.size()) // Ensure the index is within bounds
+    {
+        if (do_helical_refine)
+        {
+            transformCartesianAndHelicalCoords(offset_x, offset_y, offset_z, offset_x, offset_y, offset_z,
+                                               rot_deg, tilt_deg, psi_deg, ((is_3d_trans) ? (3) : (2)),
+                                               CART_TO_HELICAL_COORDS);
+        }
+
+        translations_x[index] = offset_x;
+        translations_y[index] = offset_y;
+
+        if (is_3d_trans)
+        {
+            translations_z[index] = offset_z;
+        }
+    }
+    else
+    {
+        // Handle the case where the index is out of range (could throw an exception or handle error)
+        std::cerr << "Index out of bounds!" << std::endl;
+    }
+}
+
 void HealpixSampling::setOrientations(int _order, RFLOAT _psi_step)
 {
 
@@ -588,6 +644,52 @@ void HealpixSampling::addOneOrientation(RFLOAT rot, RFLOAT tilt, RFLOAT psi, boo
 
 }
 
+// Resize the vectors to hold a specified number of elements.
+void HealpixSampling::resizeOrientation(size_t num_orientations, bool do_clear)
+{
+    if (do_clear)
+    {
+        directions_ipix.clear();
+        rot_angles.clear();
+        tilt_angles.clear();
+        psi_angles.clear();
+    }
+
+    // Resize the vectors to the appropriate size
+    directions_ipix.resize(num_orientations, -1);
+    rot_angles.resize(num_orientations, 0.0);
+    tilt_angles.resize(num_orientations, 0.0);
+    psi_angles.resize(num_orientations, 0.0);
+}
+
+// Set the orientation at a specific index.
+void HealpixSampling::setOrientation(size_t index, RFLOAT rot, RFLOAT tilt, RFLOAT psi)
+{
+    if (index < rot_angles.size()) // Ensure the index is within bounds
+    {
+        // 3D directions
+        if (is_3D)
+        {
+            rot_angles[index] = rot;
+            tilt_angles[index] = tilt;
+            directions_ipix[index] = -1;
+        }
+        else
+        {
+            rot_angles[index] = 0.0;
+            tilt_angles[index] = 0.0;
+            directions_ipix[index] = -1;
+        }
+
+        // In-plane rotation
+        psi_angles[index] = psi;
+    }
+    else
+    {
+        // Handle the case where the index is out of range (could throw an exception or handle error)
+        std::cerr << "Index out of bounds!" << std::endl;
+    }
+}
 
 void HealpixSampling::writeAllOrientationsToBild(FileName fn_bild, std::string rgb, RFLOAT size)
 {

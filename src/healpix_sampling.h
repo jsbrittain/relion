@@ -212,11 +212,34 @@ public:
     		RFLOAT tilt_deg = 0.,
     		RFLOAT psi_deg = 0.);
 
+    /* Resize the vectors to hold a specified number of translations. */
+    void resizeTranslation(size_t num_translations, bool do_clear = false);
+    
+    /* Set the translation at a specific index.*/
+    void setTranslation(
+        size_t index, 
+        RFLOAT offset_x, 
+        RFLOAT offset_y, 
+        RFLOAT offset_z,
+        bool do_helical_refine, 
+        RFLOAT rot_deg, 
+        RFLOAT tilt_deg, 
+        RFLOAT psi_deg);
+
     /* Set the non-oversampled lists of directions and in-plane rotations */
     void setOrientations(int _order = -1, RFLOAT _psi_step = -1.);
 
     /* Add a single orientation */
     void addOneOrientation(RFLOAT rot, RFLOAT tilt, RFLOAT psi, bool do_clear = false);
+
+
+    /* Resize the vectors to hold a specified number of elements. */
+    void resizeOrientation(size_t num_orientations, bool do_clear = false);
+
+
+    /* Set the orientation at a specific index. */
+    void setOrientation(size_t index, RFLOAT rot, RFLOAT tilt, RFLOAT psi);
+
 
     /* Write all orientations as a sphere in a bild file
      * Mainly useful for debugging */
