@@ -1515,10 +1515,15 @@ public:
 		if (this->accType == accCUDA)
 		{
 #ifdef DEBUG_CUDA
-			if (this->dPtr == NULL || this->doFreeDevice==true)
+			if (this->dPtr == NULL)
 			{
 				printf("error free device\n");
 				ACC_PTR_DEBUG_FATAL("Free device memory was called on NULL pointer in free_device().\n");
+			}
+			if (this->doFreeDevice==false)
+			{
+				printf("error free device\n");
+				ACC_PTR_DEBUG_FATAL("Double free device memory called in free_device().\n");
 			}
 #endif
 			this->doFreeDevice = false;

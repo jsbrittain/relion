@@ -205,29 +205,30 @@ template <typename T>
 static T getMaxOnDevice(AccPtr<T> &ptr)
 {
 #ifdef _CUDA_ENABLED
-return CudaKernels::getMaxOnDevice<T>(ptr);
-#else
 #ifdef DEBUG_CUDA
 	if (ptr.getSize() == 0)
 		printf("DEBUG_ERROR: getMaxOnDevice called with pointer of zero size.\n");
 	if (ptr.getHostPtr() == NULL)
 		printf("DEBUG_ERROR: getMaxOnDevice called with null device pointer.\n");
 #endif
+  return CudaKernels::getMaxOnDevice<T>(ptr);
+#else
 	return CpuKernels::getMax<T>(ptr(), ptr.getSize());
 #endif
 }
+
 template <typename T>
 static T getMaxOnDevice(AccPtrNew<T> &ptr)
 {
 #ifdef _CUDA_ENABLED
-return CudaKernels::getMaxOnDevice<T>(ptr);
-#else
 #ifdef DEBUG_CUDA
 	if (ptr.getSize() == 0)
 		printf("DEBUG_ERROR: getMaxOnDevice called with pointer of zero size.\n");
 	if (ptr.getHostPtr() == NULL)
 		printf("DEBUG_ERROR: getMaxOnDevice called with null device pointer.\n");
 #endif
+  return CudaKernels::getMaxOnDevice<T>(ptr);
+#else
 	return CpuKernels::getMax<T>(ptr(), ptr.getSize());
 #endif
 }

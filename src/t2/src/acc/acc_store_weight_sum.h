@@ -526,17 +526,17 @@ void storeWeightedSumsCollectData(Context<MlClass> &ctx)
 
 
             collect2jobs_block<64, 128, 4, 8>(
-                blocks64x128[exp_iclass].getSize(),
-                ~blocks64x128[exp_iclass],
+                blocks64x128[exp_iclass - sp.iclass_min].getSize(),
+                ~blocks64x128[exp_iclass - sp.iclass_min],
                 ~(TransRearrangedIndex),
-                ~(OrientRearrangedIndex[exp_iclass]),
+                ~(OrientRearrangedIndex[exp_iclass - sp.iclass_min]),
                 &(~oo_otrans)[otrans_x+cpos],          // otrans-size -> make const
                 &(~oo_otrans)[otrans_y+cpos],          // otrans-size -> make const
                 &(~oo_otrans)[otrans_z+cpos],          // otrans-size -> make const
                 &(~oo_otrans)[otrans_x2y2z2+cpos],     // otrans-size -> make const
                 ~thisClassFinePassWeights.weights,
                 (XFLOAT)op.significant_weight[img_id],
-				(XFLOAT)op.sum_weight[img_id],
+                (XFLOAT)op.sum_weight[img_id],
                 &(~p_weights)[partial_pos],
                 &(~p_thr_wsum_prior_offsetxyz_class)[offsetx_class+partial_pos],
                 &(~p_thr_wsum_prior_offsetxyz_class)[offsety_class+partial_pos],

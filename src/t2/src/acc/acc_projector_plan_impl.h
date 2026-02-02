@@ -759,13 +759,17 @@ void AccProjectorPlanNew::set_up_from_old_plan(AccProjectorPlan &old_plan)
 	orientation_num = old_plan.orientation_num;
 	iorientclasses.freeIfSet();
 	iorientclasses.setSize(old_plan.iorientclasses.getSize());
-	iorientclasses.hostAlloc();
-	iorientclasses.copyFrom(old_plan.iorientclasses);
-	iorientclasses.putOnDevice();
+  if (orientation_num > 0) {
+    iorientclasses.hostAlloc();
+    iorientclasses.copyFrom(old_plan.iorientclasses);
+    iorientclasses.putOnDevice();
+  }
 
 	eulers.freeIfSet();
 	eulers.setSize(old_plan.eulers.getSize());
-	eulers.hostAlloc();
-	eulers.copyFrom(old_plan.eulers);
-	eulers.putOnDevice();
+  if (orientation_num > 0 ) {
+    eulers.hostAlloc();
+    eulers.copyFrom(old_plan.eulers);
+    eulers.putOnDevice();
+  }
 }

@@ -1610,10 +1610,10 @@ void convertAllSquaredDifferencesToWeights(unsigned exp_ipass,
 						// printf("block num : %d\n", blocks64x128[exp_iclass].getSize());
 						kernel_exponentiate_weights_fine_block<
 						64, 128, 4, 8>(
-								blocks64x128[exp_iclass].getSize(),
-								~blocks64x128[exp_iclass],
+								blocks64x128[exp_iclass - sp.iclass_min].getSize(),
+								~blocks64x128[exp_iclass - sp.iclass_min],
 								~(TransRearrangedIndex),
-								~(CoarseIndex2RotId[exp_iclass]),
+								~(CoarseIndex2RotId[exp_iclass - sp.iclass_min]),
 								~pdf_orientation_class,
 								~pdf_orientation_zeros_class,
 								~pdf_offset_class,
@@ -1885,7 +1885,7 @@ void convertAllSquaredDifferencesToWeights(unsigned exp_ipass,
 		}
 
 		op.significant_weight[img_id] = (RFLOAT) my_significant_weight;
-		} // end loop img_id
+  } // end loop img_id
 
 #ifdef TIMING
 	// if (op.part_id == baseMLO->exp_my_first_part_id)
