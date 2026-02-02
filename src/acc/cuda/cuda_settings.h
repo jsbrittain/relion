@@ -13,6 +13,8 @@
 #include "src/error.h"
 
 #include <curand.h>
+#include <cuda_fp16.h>
+#define CUDA_HALF __half
 
 // Required compute capability
 #define CUDA_CC_MAJOR 3

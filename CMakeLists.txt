@@ -664,6 +664,7 @@ if (BUILD_T2)
     message(STATUS "Building RELION Refine (T2 variant)")
     add_definitions(-DNEWMEM)
     add_definitions(-DNDEBUG)
+    add_definitions(-DBUILD_T2)
     ADD_SUBDIRECTORY(src/t2/src/apps)
 endif()
 

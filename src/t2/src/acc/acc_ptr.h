@@ -1495,9 +1495,9 @@ public:
 		if (this->accType == accCUDA)
 		{
 #ifdef DEBUG_CUDA
-			if(size==0)
+			if(this->size==0)
 				ACC_PTR_DEBUG_FATAL("deviceAlloc called with size == 0");
-			if (doFreeDevice)
+			if (this->doFreeDevice)
 				ACC_PTR_DEBUG_FATAL("Device double allocation.\n");
 #endif
 				this->doFreeDevice = true;
@@ -1515,7 +1515,7 @@ public:
 		if (this->accType == accCUDA)
 		{
 #ifdef DEBUG_CUDA
-			if (dPtr == NULL || this->doFreeDevice==true)
+			if (this->dPtr == NULL || this->doFreeDevice==true)
 			{
 				printf("error free device\n");
 				ACC_PTR_DEBUG_FATAL("Free device memory was called on NULL pointer in free_device().\n");
@@ -1716,7 +1716,7 @@ public:
 		}
 
 #ifdef DEBUG_CUDA
-		if (dPtr!=NULL)
+		if (this->dPtr!=NULL)
 			ACC_PTR_DEBUG_FATAL("resizeHostCopy: Resizing host with present device allocation.\n");
 		if (newSize==0)
 			ACC_PTR_DEBUG_INFO("resizeHostCopy: Array resized to size zero (permitted with fear).  Something may break downstream\n");
