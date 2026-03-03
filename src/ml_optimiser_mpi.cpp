@@ -985,6 +985,735 @@ void MlOptimiserMpi::initialiseWorkLoad()
 #endif
 }
 
+void MlOptimiserMpi::setupAccelerators()
+{
+#if defined _CUDA_ENABLED || defined _HIP_ENABLED
+	/************************************************************************/
+	//GPU memory setup
+
+	std::vector<size_t> allocationSizes;
+	MPI_Barrier(MPI_COMM_WORLD);
+
+	if (do_gpu && ! node->isLeader())
+	{
+		for (int i = 0; i < gpuDevices.size(); i ++)
+		{
+#ifdef TIMING
+		timer.tic(TIMING_EXP_4b);
+#endif
+			MlDeviceBundle *b = new MlDeviceBundle(this);
+			b->setDevice(gpuDevices[i]);
+			b->setupFixedSizedObjects();
+			accDataBundles.push_back((void*)b);
+#ifdef TIMING
+		timer.toc(TIMING_EXP_4b);
+#endif
+		}
+
+		std::vector<unsigned> threadcountOnDevice(accDataBundles.size(),0);
+
+		for (int i = 0; i < gpuOptimiserDeviceMap.size(); i ++)
+		{
+			std::stringstream didSs;
+			didSs << "RRr" << node->rank << "t" << i;
+			MlOptimiserAccGPU *b = new MlOptimiserAccGPU(this, (MlDeviceBundle*) accDataBundles[gpuOptimiserDeviceMap[i]],didSs.str().c_str());
+			b->resetData();
+			gpuOptimisers.push_back((void*)b);
+			threadcountOnDevice[gpuOptimiserDeviceMap[i]] ++;
+		}
+
+		int devCount;
+		HANDLE_ERROR(accGPUGetDeviceCount(&devCount));
+		HANDLE_ERROR(accGPUDeviceSynchronize());
+
+		for (int i = 0; i < accDataBundles.size(); i ++)
+		{
+			if(((MlDeviceBundle*)accDataBundles[i])->device_id >= devCount || ((MlDeviceBundle*)accDataBundles[i])->device_id < 0 )
+			{
+				//std::cerr << " using device_id=" << ((MlDeviceBundle*)accDataBundles[i])->device_id << " (device no. " << ((MlDeviceBundle*)accDataBundles[i])->device_id+1 << ") which is not within the available device range" << devCount << std::endl;
+				CRITICAL(ERR_GPUID);
+			}
+			else
+				HANDLE_ERROR(accGPUSetDevice(((MlDeviceBundle*)accDataBundles[i])->device_id));
+
+			size_t free, total, allocationSize;
+			HANDLE_ERROR(accGPUMemGetInfo( &free, &total ));
+
+			free = (float) free / (float)gpuDeviceShares[i];
+			size_t required_free = requested_free_gpu_memory + GPU_THREAD_MEMORY_OVERHEAD_MB*1000*1000*threadcountOnDevice[i];
+
+			if (free < required_free)
+			{
+				printf("WARNING: Ignoring required free GPU memory amount of %zu MB, due to space insufficiency.\n", required_free/1000000);
+				#ifdef _CUDA_ENABLED
+					allocationSize = (double)free *0.7;
+				#elif defined _HIP_ENABLED
+					allocationSize = (double)free *0.7;
+				#endif
+			}
+			else
+			{
+				#ifdef _CUDA_ENABLED
+					allocationSize = free - required_free;
+				#elif defined _HIP_ENABLED
+					allocationSize = free - required_free;
+					// allocationSize = (double)free *0.5;
+					// #ifdef DEBUG_HIP
+					// 	printf("WARNING: due to 296623 ticket, use 50%% of free GPU memory as allocationSize %zu MB.\n", allocationSize/1000000);
+					// #else
+					// 	printf("WARNING: Using 50%% of free GPU memory as allocationSize %zu MB.\n", allocationSize/1000000);
+					// #endif
+				#endif
+			}
+
+			if (allocationSize < 200000000)
+				printf("WARNING: The available space on the GPU after initialization (%zu MB) might be insufficient for the expectation step.\n", allocationSize/1000000);
+
+#ifdef PRINT_GPU_MEM_INFO
+			printf("INFO: Projector model size %dx%dx%d\n", (int)mymodel.PPref[0].data.xdim, (int)mymodel.PPref[0].data.ydim, (int)mymodel.PPref[0].data.zdim );
+			printf("INFO: Free memory for Custom Allocator of device bundle %d of rank %d is %d MB\n", i, node->rank, (int) ( ((float)allocationSize)/1000000.0 ) );
+#endif
+			allocationSizes.push_back(allocationSize);
+		}
+	}
+
+	MPI_Barrier(MPI_COMM_WORLD);
+
+	if (do_gpu && ! node->isLeader())
+	{
+		for (int i = 0; i < accDataBundles.size(); i ++)
+			((MlDeviceBundle*)accDataBundles[i])->setupTunableSizedObjects(allocationSizes[i]);
+	}
+#endif // _CUDA_ENABLED or _HIP_ENABLED
+#ifdef _SYCL_ENABLED
+	if (do_sycl && ! node->isLeader())
+	{
+		char* pEnvStream = std::getenv("relionSyclUseStream");
+		std::string strStream = (pEnvStream == nullptr) ? "0" : pEnvStream;
+		std::transform(strStream.begin(), strStream.end(), strStream.begin(), [](unsigned char c){return static_cast<char>(std::tolower(c));});
+		const bool isStream = (strStream == "1" || strStream == "on") ? true : false;
+
+		for (int i = 0; i < gpuDevices.size(); i++)
+		{
+			accDataBundles.push_back((void*)(new MlSyclDataBundle(syclDeviceList[gpuDevices[i]])));
+			((MlSyclDataBundle*)accDataBundles[i])->setup(this);
+		}
+
+		for (int i = 0; i < gpuOptimiserDeviceMap.size(); i++)
+		{
+			MlOptimiserSYCL *b = new MlOptimiserSYCL(this, (MlSyclDataBundle*)accDataBundles[gpuOptimiserDeviceMap[i]], isStream, "sycl_optimiser");
+			b->resetData();
+			b->threadID = i;
+			gpuOptimisers.push_back((void*)b);
+		}
+	}
+#endif
+#ifdef ALTCPU
+	/************************************************************************/
+	//CPU memory setup
+	if (do_cpu  && ! node->isLeader())
+	{
+		unsigned nr_classes = mymodel.PPref.size();
+		// Allocate Array of complex arrays for this class
+		if (posix_memalign((void **)&mdlClassComplex, MEM_ALIGN, nr_classes * sizeof (std::complex<XFLOAT> *)))
+			CRITICAL(RAMERR);
+
+		// Set up XFLOAT complex array shared by all threads for each class
+		for (int iclass = 0; iclass < nr_classes; iclass++)
+		{
+			int mdlX = mymodel.PPref[iclass].data.xdim;
+			int mdlY = mymodel.PPref[iclass].data.ydim;
+			int mdlZ = mymodel.PPref[iclass].data.zdim;
+			size_t mdlXYZ;
+			if(mdlZ == 0)
+				mdlXYZ = (size_t)mdlX*(size_t)mdlY;
+			else
+				mdlXYZ = (size_t)mdlX*(size_t)mdlY*(size_t)mdlZ;
+
+			try
+			{
+				mdlClassComplex[iclass] = new std::complex<XFLOAT>[mdlXYZ];
+			}
+			catch (std::bad_alloc& ba)
+			{
+				CRITICAL(RAMERR);
+			}
+
+			std::complex<XFLOAT> *pData = mdlClassComplex[iclass];
+
+			// Copy results into complex number array
+			for (size_t i = 0; i < mdlXYZ; i ++)
+			{
+				std::complex<XFLOAT> arrayval(
+					(XFLOAT) mymodel.PPref[iclass].data.data[i].real,
+					(XFLOAT) mymodel.PPref[iclass].data.data[i].imag
+				);
+				pData[i] = arrayval;
+			}
+		}
+
+		MlDataBundle *b = new MlDataBundle();
+		b->setup(this);
+		accDataBundles.push_back((void*)b);
+	}  // do_cpu
+#endif // ALTCPU
+	/************************************************************************/
+}
+
+void MlOptimiserMpi::runLeaderExpectationLoop(MultidimArray<long int>& job_buf, long int my_nr_particles)
+{
+#ifdef TIMING
+	timer.tic(TIMING_EXP_5);
+#endif
+	long int& job_first      = job_buf(0);
+	long int& job_last       = job_buf(1);
+	long int& job_nimg       = job_buf(2);
+	long int& job_len_fn_img = job_buf(3);
+	long int& job_len_fn_ctf = job_buf(4);
+	long int& job_len_fn_rec = job_buf(5);
+
+	try
+	{
+		long int progress_bar_step_size = XMIPP_MAX(1, my_nr_particles / 60);
+		long int prev_barstep = 0;
+		long int my_first_particle = 0.;
+		long int my_last_particle = my_nr_particles - 1;
+		long int my_first_particle_halfset1 = 0;
+		long int my_last_particle_halfset1 = mydata.numberOfParticles(1) - 1;
+		long int my_first_particle_halfset2 = mydata.numberOfParticles(1);
+		long int my_last_particle_halfset2 = mydata.numberOfParticles() - 1;
+
+		if (subset_size > 0)
+		{
+			my_last_particle_halfset1 = my_nr_particles;
+			my_last_particle_halfset2 = mydata.numberOfParticles(1) + my_nr_particles;
+
+		}
+
+		if (verb > 0)
+		{
+			if (do_grad)
+			{
+				std::cout << " Gradient optimisation iteration " << iter;
+				if (!do_auto_refine)
+					std::cout << " of " << nr_iter;
+				if (my_nr_particles < mydata.numberOfParticles())
+					std::cout << " with " << my_nr_particles << " particles";
+				std::cout << " (Step size " << (float) ( (int) (grad_current_stepsize * 100 + .5) ) / 100 << ")";
+			}
+			else
+			{
+				std::cout << " Expectation iteration " << iter;
+				if (!do_auto_refine)
+					std::cout << " of " << nr_iter;
+				if (my_nr_particles < mydata.numberOfParticles())
+					std::cout << " (with " << my_nr_particles << " particles)";
+			}
+			std::cout << std::endl;
+			init_progress_bar(my_nr_particles);
+		}
+
+		// Leader distributes all packages of SomeParticles
+		int nr_followers_done = 0;
+		int random_halfset = 0;
+		long int nr_particles_todo, nr_particles_done = 0;
+		long int nr_particles_done_halfset1 = 0;
+		long int nr_particles_done_halfset2 = 0;
+		long int my_nr_particles_done = 0;
+
+
+		// SHWS10052021: reduce frequency of abort check 10-fold
+		long int icheck= 0;
+		while (nr_followers_done < node->size - 1)
+		{
+
+			if (icheck%10 == 0)
+			{
+				if (pipeline_control_check_abort_job()) MPI_Abort(MPI_COMM_WORLD, RELION_EXIT_ABORTED);
+			}
+			icheck++;
+
+			// Receive a job request from a follower
+			MPI_Status status;
+			node->relion_MPI_Recv(MULTIDIM_ARRAY(job_buf), MULTIDIM_SIZE(job_buf), MPI_LONG, MPI_ANY_SOURCE, MPITAG_JOB_REQUEST, MPI_COMM_WORLD, status);
+			// Which follower sent this request?
+			int this_follower = status.MPI_SOURCE;
+
+//#define DEBUG_MPIEXP2
+#ifdef DEBUG_MPIEXP2
+			std::cerr << " MASTER RECEIVING from follower= " << this_follower<< " JOB_FIRST= " << job_first << " JOB_LAST= " << job_last
+					<< " JOB_NIMG= "<< job_nimg << " JOB_NPAR= "<< (job_last - job_first + 1) << std::endl;
+#endif
+			// The first time a follower reports it only asks for input, but does not send output of a previous processing task. In that case job_nimg==0
+			// Otherwise, the leader needs to receive and handle the updated metadata from the followers
+			if (job_nimg > 0)
+			{
+				exp_metadata.resize(job_nimg, METADATA_LINE_LENGTH_BEFORE_BODIES + (mymodel.nr_bodies) * METADATA_NR_BODY_PARAMS);
+				node->relion_MPI_Recv(MULTIDIM_ARRAY(exp_metadata), MULTIDIM_SIZE(exp_metadata), MY_MPI_DOUBLE, this_follower, MPITAG_METADATA, MPI_COMM_WORLD, status);
+
+				// The leader monitors the changes in the optimal orientations and classes
+				monitorHiddenVariableChanges(job_first, job_last);
+
+				// The leader then updates the mydata.MDimg table
+				MlOptimiser::setMetaDataSubset(job_first, job_last);
+				if (verb > 0 && nr_particles_done - prev_barstep> progress_bar_step_size)
+				{
+					prev_barstep = nr_particles_done;
+					if (subset_size > 0 && do_split_random_halves)
+						progress_bar(nr_particles_done/2);
+					else
+						progress_bar(nr_particles_done + (job_last - job_first + 1));
+				}
+			}
+
+			// See which random_halfset this follower belongs to, and keep track of the number of particles that have been processed already
+			if (do_split_random_halves)
+			{
+				random_halfset = (this_follower % 2 == 1) ? 1 : 2;
+				if (random_halfset == 1)
+				{
+					my_nr_particles_done = nr_particles_done_halfset1;
+					nr_particles_todo = my_last_particle_halfset1 - my_first_particle_halfset1 + 1;
+					job_first = nr_particles_done_halfset1;
+					job_last  = XMIPP_MIN(my_last_particle_halfset1, job_first + nr_pool - 1);
+				}
+				else
+				{
+					my_nr_particles_done = nr_particles_done_halfset2;
+					nr_particles_todo = my_last_particle_halfset2 - my_first_particle_halfset2 + 1;
+					job_first = mydata.numberOfParticles(1) + nr_particles_done_halfset2;
+					job_last  = XMIPP_MIN(my_last_particle_halfset2, job_first + nr_pool - 1);
+				}
+			}
+			else
+			{
+				random_halfset = 0;
+				my_nr_particles_done = nr_particles_done;
+				nr_particles_todo =  my_last_particle - my_first_particle + 1;
+				job_first = nr_particles_done;
+				job_last  = XMIPP_MIN(my_last_particle, job_first + nr_pool - 1);
+			}
+
+			// Now send out a new job
+			if (my_nr_particles_done < nr_particles_todo)
+			{
+				MlOptimiser::getMetaAndImageDataSubset(job_first, job_last, !do_parallel_disc_io);
+				job_nimg = YSIZE(exp_metadata);
+				job_len_fn_img = exp_fn_img.length() + 1; // +1 to include \0 at the end of the string
+				job_len_fn_ctf = exp_fn_ctf.length() + 1;
+				job_len_fn_rec = exp_fn_recimg.length() + 1;
+			}
+			else
+			{
+				// There are no more particles in the list
+				job_first = -1;
+				job_last = -1;
+				job_nimg = 0;
+				job_len_fn_img = 0;
+				job_len_fn_ctf = 0;
+				job_len_fn_rec = 0;
+				exp_metadata.clear();
+				exp_imagedata.clear();
+
+				// No more particles, this follower is done now
+				nr_followers_done++;
+			}
+
+			//std::cerr << "subset= " << subset << " half-set= " << random_halfset
+			//		<< " nr_subset_particles_done= " << nr_subset_particles_done
+			//		<< " nr_particles_todo=" << nr_particles_todo << " JOB_FIRST= " << job_first << " JOB_LAST= " << job_last << std::endl;
+
+#ifdef DEBUG_MPIEXP2
+			std::cerr << " MASTER SENDING to follower= " << this_follower<< " JOB_FIRST= " << job_first << " JOB_LAST= " << job_last
+							<< " JOB_NIMG= "<< job_nimg << " JOB_NPAR= "<< (job_last - job_first + 1) << std::endl;
+#endif
+			node->relion_MPI_Send(MULTIDIM_ARRAY(job_buf), MULTIDIM_SIZE(job_buf), MPI_LONG, this_follower, MPITAG_JOB_REPLY, MPI_COMM_WORLD);
+
+			//806 Leader also sends the required metadata and imagedata for this job
+			if (job_nimg > 0)
+			{
+				node->relion_MPI_Send(MULTIDIM_ARRAY(exp_metadata), MULTIDIM_SIZE(exp_metadata), MY_MPI_DOUBLE, this_follower, MPITAG_METADATA, MPI_COMM_WORLD);
+				if (do_parallel_disc_io)
+				{
+					node->relion_MPI_Send((void*)exp_fn_img.c_str(), job_len_fn_img, MPI_CHAR, this_follower, MPITAG_METADATA, MPI_COMM_WORLD);
+					// Send filenames of images to the followers
+					if (job_len_fn_ctf > 1)
+						node->relion_MPI_Send((void*)exp_fn_ctf.c_str(), job_len_fn_ctf, MPI_CHAR, this_follower, MPITAG_METADATA, MPI_COMM_WORLD);
+					if (job_len_fn_rec > 1)
+						node->relion_MPI_Send((void*)exp_fn_recimg.c_str(), job_len_fn_rec, MPI_CHAR, this_follower, MPITAG_METADATA, MPI_COMM_WORLD);
+				}
+				else
+				{
+					// new in 3.1: first send the image_size of these particles (as no longer necessarily the same as mymodel.ori_size...)
+					int my_image_size = mydata.getOpticsImageSize(mydata.getOpticsGroup(job_first));
+					node->relion_MPI_Send(&my_image_size, 1, MPI_INT, this_follower, MPITAG_IMAGE_SIZE, MPI_COMM_WORLD);
+
+					// Send imagedata to the followers
+					node->relion_MPI_Send(MULTIDIM_ARRAY(exp_imagedata), MULTIDIM_SIZE(exp_imagedata), MY_MPI_DOUBLE, this_follower, MPITAG_IMAGE, MPI_COMM_WORLD);
+				}
+			}
+
+			// Update the total number of particles that has been done already
+			nr_particles_done += (job_last - job_first + 1);
+			if (do_split_random_halves)
+			{
+				// Also update the number of particles that has been done for each subset
+				if (random_halfset == 1)
+				{
+					nr_particles_done_halfset1 += (job_last - job_first + 1);
+				}
+				else
+				{
+					nr_particles_done_halfset2 += (job_last - job_first + 1);
+				}
+			}
+		}
+	}
+	catch (RelionError XE)
+	{
+		std::cerr << "leader encountered error: " << XE;
+		MPI_Abort(MPI_COMM_WORLD, RELION_EXIT_FAILURE);
+	}
+#ifdef TIMING
+	timer.toc(TIMING_EXP_5);
+#endif
+}
+
+void MlOptimiserMpi::runFollowerExpectationLoop(MultidimArray<long int>& job_buf)
+{
+#ifdef TIMING
+	timer.tic(TIMING_EXP_6);
+#endif
+	long int& job_first      = job_buf(0);
+	long int& job_last       = job_buf(1);
+	long int& job_nimg       = job_buf(2);
+	long int& job_len_fn_img = job_buf(3);
+	long int& job_len_fn_ctf = job_buf(4);
+	long int& job_len_fn_rec = job_buf(5);
+
+	try
+	{
+		if (halt_all_followers_except_this > 0)
+		{
+			// Let all followers except this one sleep forever
+			if (node->rank != halt_all_followers_except_this)
+				while (true)
+					sleep(1000);
+		}
+
+		// Followers do the real work (The follower does not need to know to which random_halfset he belongs)
+		// Start off with an empty job request
+		job_first = 0;
+		job_last = -1; // So that initial nr_particles (=job_last-job_first+1) is zero!
+		job_nimg = 0;
+		job_len_fn_img = 0;
+		job_len_fn_ctf = 0;
+		job_len_fn_rec = 0;
+		node->relion_MPI_Send(MULTIDIM_ARRAY(job_buf), MULTIDIM_SIZE(job_buf), MPI_LONG, 0, MPITAG_JOB_REQUEST, MPI_COMM_WORLD);
+
+		MPI_Status status;
+		while (true)
+		{
+#ifdef TIMING
+			timer.tic(TIMING_MPISLAVEWAIT1);
+#endif
+			//Receive a new bunch of particles
+			node->relion_MPI_Recv(MULTIDIM_ARRAY(job_buf), MULTIDIM_SIZE(job_buf), MPI_LONG, 0, MPITAG_JOB_REPLY, MPI_COMM_WORLD, status);
+#ifdef TIMING
+			timer.toc(TIMING_MPISLAVEWAIT1);
+#endif
+
+			//Check whether I am done
+			if (job_nimg <= 0)
+			{
+#ifdef DEBUG
+				std::cerr <<" follower "<< node->rank << " has finished expectation.."<<std::endl;
+#endif
+				exp_imagedata.clear();
+				exp_metadata.clear();
+				break;
+			}
+			else
+			{
+#ifdef TIMING
+				timer.tic(TIMING_MPISLAVEWAIT2);
+#endif
+				// Also receive the imagedata and the metadata for these images from the leader
+				exp_metadata.resize(job_nimg, METADATA_LINE_LENGTH_BEFORE_BODIES + (mymodel.nr_bodies) * METADATA_NR_BODY_PARAMS);
+				node->relion_MPI_Recv(MULTIDIM_ARRAY(exp_metadata), MULTIDIM_SIZE(exp_metadata), MY_MPI_DOUBLE, 0, MPITAG_METADATA, MPI_COMM_WORLD, status);
+
+				// Receive the image filenames or the exp_imagedata
+				if (do_parallel_disc_io)
+				{
+					// Resize the exp_fn_img strings
+					char* rec_buf;
+					rec_buf = (char *) malloc(job_len_fn_img);
+					node->relion_MPI_Recv(rec_buf, job_len_fn_img, MPI_CHAR, 0, MPITAG_METADATA, MPI_COMM_WORLD, status);
+					exp_fn_img = rec_buf;
+					free(rec_buf);
+					if (job_len_fn_ctf > 1)
+					{
+						char* rec_buf2;
+						rec_buf2 = (char *) malloc(job_len_fn_ctf);
+						node->relion_MPI_Recv(rec_buf2, job_len_fn_ctf, MPI_CHAR, 0, MPITAG_METADATA, MPI_COMM_WORLD, status);
+						exp_fn_ctf = rec_buf2;
+						free(rec_buf2);
+					}
+					if (job_len_fn_rec > 1)
+					{
+						char* rec_buf3;
+						rec_buf3 = (char *) malloc(job_len_fn_rec);
+						node->relion_MPI_Recv(rec_buf3, job_len_fn_rec, MPI_CHAR, 0, MPITAG_METADATA, MPI_COMM_WORLD, status);
+						exp_fn_recimg = rec_buf3;
+						free(rec_buf3);
+					}
+				}
+				else
+				{
+					int mysize;
+					node->relion_MPI_Recv(&mysize, 1, MPI_INT, 0, MPITAG_IMAGE_SIZE, MPI_COMM_WORLD, status);
+					// resize the exp_imagedata array
+					if (mymodel.data_dim == 3)
+					{
+						if (do_ctf_correction)
+						{
+							if (has_converged && do_use_reconstruct_images)
+								exp_imagedata.resize(3*mysize, mysize, mysize);
+							else
+								exp_imagedata.resize(2*mysize, mysize, mysize);
+						}
+						else
+						{
+							if (has_converged && do_use_reconstruct_images)
+								exp_imagedata.resize(2*mysize, mysize, mysize);
+							else
+								exp_imagedata.resize(mysize, mysize, mysize);
+						}
+					}
+					else
+					{
+						if (has_converged && do_use_reconstruct_images)
+							exp_imagedata.resize(2*job_nimg, mysize, mysize);
+						else
+							exp_imagedata.resize(job_nimg, mysize, mysize);
+					}
+					node->relion_MPI_Recv(MULTIDIM_ARRAY(exp_imagedata), MULTIDIM_SIZE(exp_imagedata), MY_MPI_DOUBLE, 0, MPITAG_IMAGE, MPI_COMM_WORLD, status);
+				}
+
+				// Now process these images
+#ifdef DEBUG_MPIEXP
+				std::cerr << " SLAVE EXECUTING node->rank= " << node->rank << " JOB_FIRST= " << job_first << " JOB_LAST= " << job_last << std::endl;
+#endif
+#ifdef TIMING
+				timer.toc(TIMING_MPISLAVEWAIT2);
+				timer.tic(TIMING_MPISLAVEWORK);
+#endif
+				expectationSomeParticles(job_first, job_last);
+#ifdef TIMING
+				timer.toc(TIMING_MPISLAVEWORK);
+				timer.tic(TIMING_MPISLAVEWAIT3);
+#endif
+
+				// Report to the leader how many particles I have processed
+				node->relion_MPI_Send(MULTIDIM_ARRAY(job_buf), MULTIDIM_SIZE(job_buf), MPI_LONG, 0, MPITAG_JOB_REQUEST, MPI_COMM_WORLD);
+				// Also send the metadata belonging to those
+				node->relion_MPI_Send(MULTIDIM_ARRAY(exp_metadata), MULTIDIM_SIZE(exp_metadata), MY_MPI_DOUBLE, 0, MPITAG_METADATA, MPI_COMM_WORLD);
+
+#ifdef TIMING
+				timer.toc(TIMING_MPISLAVEWAIT3);
+#endif
+			}
+		}
+//		TODO: define MPI_COMM_SLAVES!!!!	MPI_Barrier(node->MPI_COMM_SLAVES);
+
+#if defined _CUDA_ENABLED || defined _HIP_ENABLED
+		if (do_gpu)
+		{
+			for (int i = 0; i < accDataBundles.size(); i ++)
+			{
+#ifdef TIMING
+	timer.tic(TIMING_EXP_7);
+#endif
+				MlDeviceBundle* b = ((MlDeviceBundle*)accDataBundles[i]);
+				b->syncAllBackprojects();
+
+				for (int j = 0; j < b->projectors.size(); j++)
+					b->projectors[j].clear();
+
+				for (int j = 0; j < b->backprojectors.size(); j++)
+				{
+					unsigned long s = wsum_model.BPref[j].data.nzyxdim;
+					XFLOAT *reals = new XFLOAT[s];
+					XFLOAT *imags = new XFLOAT[s];
+					XFLOAT *weights = new XFLOAT[s];
+
+					b->backprojectors[j].getMdlData(reals, imags, weights);
+
+					for (unsigned long n = 0; n < s; n++)
+					{
+						wsum_model.BPref[j].data.data[n].real += (RFLOAT) reals[n];
+						wsum_model.BPref[j].data.data[n].imag += (RFLOAT) imags[n];
+						wsum_model.BPref[j].weight.data[n] += (RFLOAT) weights[n];
+					}
+
+					delete [] reals;
+					delete [] imags;
+					delete [] weights;
+
+					b->backprojectors[j].clear();
+				}
+
+				for (int j = 0; j < b->coarseProjectionPlans.size(); j++)
+					b->coarseProjectionPlans[j].clear();
+#ifdef TIMING
+	timer.toc(TIMING_EXP_7);
+#endif
+			}
+#ifdef TIMING
+	timer.tic(TIMING_EXP_8);
+#endif
+			for (int i = 0; i < gpuOptimisers.size(); i ++)
+				delete (MlOptimiserAccGPU*) gpuOptimisers[i];
+
+			gpuOptimisers.clear();
+
+
+			for (int i = 0; i < accDataBundles.size(); i ++)
+			{
+
+				((MlDeviceBundle*)accDataBundles[i])->allocator->syncReadyEvents();
+				((MlDeviceBundle*)accDataBundles[i])->allocator->freeReadyAllocs();
+
+#if defined DEBUG_CUDA || defined DEBUG_HIP
+				if (((MlDeviceBundle*) accDataBundles[i])->allocator->getNumberOfAllocs() != 0)
+				{
+					printf("DEBUG_ERROR: Non-zero allocation count encountered in custom allocator between iterations.\n");
+					((MlDeviceBundle*) accDataBundles[i])->allocator->printState();
+					fflush(stdout);
+					CRITICAL(ERR_CANZ);
+				}
+#endif
+			}
+
+			for (int i = 0; i < accDataBundles.size(); i ++)
+				delete (MlDeviceBundle*) accDataBundles[i];
+
+			accDataBundles.clear();
+#ifdef TIMING
+	timer.toc(TIMING_EXP_8);
+#endif
+		}
+#endif // _CUDA_ENABLED or _HIP_ENABLED
+#ifdef _SYCL_ENABLED
+		/************************************************************************/
+		if (do_sycl)
+		{
+			for (int i = 0; i < accDataBundles.size(); i++)
+			{
+				MlSyclDataBundle *b = (MlSyclDataBundle*)accDataBundles[i];
+				b->syncAllBackprojects();
+
+				for (int j = 0; j < b->projectors.size(); j++)
+					b->projectors[j].clear();
+
+				for (int j = 0; j < b->backprojectors.size(); j++)
+				{
+					unsigned long s = wsum_model.BPref[j].data.nzyxdim;
+					deviceStream_t stream = b->backprojectors[j].stream;
+					XFLOAT *reals = (XFLOAT*)(stream->syclMalloc(s * sizeof(XFLOAT), syclMallocType::host));
+					XFLOAT *imags = (XFLOAT*)(stream->syclMalloc(s * sizeof(XFLOAT), syclMallocType::host));
+					XFLOAT *weights = (XFLOAT*)(stream->syclMalloc(s * sizeof(XFLOAT), syclMallocType::host));
+
+					b->backprojectors[j].getMdlData(reals, imags, weights);
+
+					for (unsigned long n = 0; n < s; n++)
+					{
+						wsum_model.BPref[j].data.data[n].real += (RFLOAT) reals[n];
+						wsum_model.BPref[j].data.data[n].imag += (RFLOAT) imags[n];
+						wsum_model.BPref[j].weight.data[n] += (RFLOAT) weights[n];
+					}
+
+					stream->syclFree(reals);
+					stream->syclFree(imags);
+					stream->syclFree(weights);
+
+					b->backprojectors[j].clear();
+				}
+
+				for (int j = 0; j < b->coarseProjectionPlans.size(); j++)
+					b->coarseProjectionPlans[j].clear();
+			}
+
+			for (int i = 0; i < gpuOptimisers.size(); i++)
+				delete (MlOptimiserSYCL*)gpuOptimisers[i];
+
+			gpuOptimisers.clear();
+
+			for (int i = 0; i < accDataBundles.size(); i++)
+				delete (MlSyclDataBundle*)accDataBundles[i];
+
+			accDataBundles.clear();
+		}
+#endif
+#ifdef ALTCPU
+		if (do_cpu)
+		{
+			MlDataBundle* b = (MlDataBundle*) accDataBundles[0];
+
+#ifdef DEBUG
+			std::cerr << "Faux thread id: " << b->thread_id << std::endl;
+#endif
+
+			for (int j = 0; j < b->projectors.size(); j++)
+				b->projectors[j].clear();
+
+			for (int j = 0; j < b->backprojectors.size(); j++)
+			{
+				unsigned long s = wsum_model.BPref[j].data.nzyxdim;
+				XFLOAT *reals = NULL;
+				XFLOAT *imags = NULL;
+				XFLOAT *weights = NULL;
+
+				b->backprojectors[j].getMdlDataPtrs(reals, imags, weights);
+
+				for (unsigned long n = 0; n < s; n++)
+				{
+					wsum_model.BPref[j].data.data[n].real += (RFLOAT) reals[n];
+					wsum_model.BPref[j].data.data[n].imag += (RFLOAT) imags[n];
+					wsum_model.BPref[j].weight.data[n] += (RFLOAT) weights[n];
+				}
+
+				b->backprojectors[j].clear();
+			}
+
+			for (int j = 0; j < b->coarseProjectionPlans.size(); j++)
+				b->coarseProjectionPlans[j].clear();
+
+			delete b;
+			accDataBundles.clear();
+
+			// Now clean up
+			unsigned nr_classes = mymodel.nr_classes;
+			for (int iclass = 0; iclass < nr_classes; iclass++)
+			{
+				delete [] mdlClassComplex[iclass];
+			}
+			free(mdlClassComplex);
+
+			tbbCpuOptimiser.clear();
+		}
+#endif  // ALTCPU
+	}
+	catch (RelionError XE)
+	{
+		std::cerr << "follower "<< node->rank << " encountered error: " << XE;
+		MPI_Abort(MPI_COMM_WORLD, RELION_EXIT_FAILURE);
+	}
+#ifdef TIMING
+	timer.toc(TIMING_EXP_6);
+#endif
+}
+
 void MlOptimiserMpi::expectation()
 {
 #ifdef TIMING
@@ -994,12 +1723,10 @@ void MlOptimiserMpi::expectation()
 	std::cerr << "MlOptimiserMpi::expectation: Entering " << std::endl;
 #endif
 
-	MultidimArray<long int> first_last_nr_images(6);
 	int first_follower = 1;
 	// Use maximum of 100 particles for 3D and 10 particles for 2D estimations
 	int n_trials_acc = (mymodel.ref_dim==3 && (mymodel.data_dim != 3|| mydata.is_tomo) ) ? 100 : 10;
 	n_trials_acc = XMIPP_MIN(n_trials_acc, mydata.numberOfParticles());
-	MPI_Status status;
 
 #ifdef MKLFFT
 	// Allow parallel FFTW execution
@@ -1156,186 +1883,8 @@ void MlOptimiserMpi::expectation()
 #ifdef TIMING
 	timer.toc(TIMING_EXP_4a);
 #endif
-	// Now perform real expectation step in parallel, use an on-demand leader-follower system
-#define JOB_FIRST (first_last_nr_images(0))
-#define JOB_LAST  (first_last_nr_images(1))
-#define JOB_NIMG  (first_last_nr_images(2))
-#define JOB_LEN_FN_IMG  (first_last_nr_images(3))
-#define JOB_LEN_FN_CTF  (first_last_nr_images(4))
-#define JOB_LEN_FN_RECIMG  (first_last_nr_images(5))
-#define JOB_NPAR  (JOB_LAST - JOB_FIRST + 1)
-
-#if defined _CUDA_ENABLED || defined _HIP_ENABLED
-	/************************************************************************/
-	//GPU memory setup
-
-	std::vector<size_t> allocationSizes;
-	MPI_Barrier(MPI_COMM_WORLD);
-
-	if (do_gpu && ! node->isLeader())
-	{
-		for (int i = 0; i < gpuDevices.size(); i ++)
-		{
-#ifdef TIMING
-		timer.tic(TIMING_EXP_4b);
-#endif
-			MlDeviceBundle *b = new MlDeviceBundle(this);
-			b->setDevice(gpuDevices[i]);
-			b->setupFixedSizedObjects();
-			accDataBundles.push_back((void*)b);
-#ifdef TIMING
-		timer.toc(TIMING_EXP_4b);
-#endif
-		}
-
-		std::vector<unsigned> threadcountOnDevice(accDataBundles.size(),0);
-
-		for (int i = 0; i < gpuOptimiserDeviceMap.size(); i ++)
-		{
-			std::stringstream didSs;
-			didSs << "RRr" << node->rank << "t" << i;
-			MlOptimiserAccGPU *b = new MlOptimiserAccGPU(this, (MlDeviceBundle*) accDataBundles[gpuOptimiserDeviceMap[i]],didSs.str().c_str());
-			b->resetData();
-			gpuOptimisers.push_back((void*)b);
-			threadcountOnDevice[gpuOptimiserDeviceMap[i]] ++;
-		}
-
-		int devCount;
-		HANDLE_ERROR(accGPUGetDeviceCount(&devCount));
-		HANDLE_ERROR(accGPUDeviceSynchronize());
-
-		for (int i = 0; i < accDataBundles.size(); i ++)
-		{
-			if(((MlDeviceBundle*)accDataBundles[i])->device_id >= devCount || ((MlDeviceBundle*)accDataBundles[i])->device_id < 0 )
-			{
-				//std::cerr << " using device_id=" << ((MlDeviceBundle*)accDataBundles[i])->device_id << " (device no. " << ((MlDeviceBundle*)accDataBundles[i])->device_id+1 << ") which is not within the available device range" << devCount << std::endl;
-				CRITICAL(ERR_GPUID);
-			}
-			else
-				HANDLE_ERROR(accGPUSetDevice(((MlDeviceBundle*)accDataBundles[i])->device_id));
-
-			size_t free, total, allocationSize;
-			HANDLE_ERROR(accGPUMemGetInfo( &free, &total ));
-
-			free = (float) free / (float)gpuDeviceShares[i];
-			size_t required_free = requested_free_gpu_memory + GPU_THREAD_MEMORY_OVERHEAD_MB*1000*1000*threadcountOnDevice[i];
-
-			if (free < required_free)
-			{
-				printf("WARNING: Ignoring required free GPU memory amount of %zu MB, due to space insufficiency.\n", required_free/1000000);
-				#ifdef _CUDA_ENABLED
-					allocationSize = (double)free *0.7;
-				#elif defined _HIP_ENABLED
-					allocationSize = (double)free *0.7;
-				#endif
-			}
-			else
-			{
-				#ifdef _CUDA_ENABLED	
-					allocationSize = free - required_free;
-				#elif defined _HIP_ENABLED
-					allocationSize = free - required_free;
-					// allocationSize = (double)free *0.5;
-					// #ifdef DEBUG_HIP
-					// 	printf("WARNING: due to 296623 ticket, use 50%% of free GPU memory as allocationSize %zu MB.\n", allocationSize/1000000);
-					// #else
-					// 	printf("WARNING: Using 50%% of free GPU memory as allocationSize %zu MB.\n", allocationSize/1000000);
-					// #endif
-				#endif
-			}
-
-			if (allocationSize < 200000000)
-				printf("WARNING: The available space on the GPU after initialization (%zu MB) might be insufficient for the expectation step.\n", allocationSize/1000000);
-
-#ifdef PRINT_GPU_MEM_INFO
-			printf("INFO: Projector model size %dx%dx%d\n", (int)mymodel.PPref[0].data.xdim, (int)mymodel.PPref[0].data.ydim, (int)mymodel.PPref[0].data.zdim );
-			printf("INFO: Free memory for Custom Allocator of device bundle %d of rank %d is %d MB\n", i, node->rank, (int) ( ((float)allocationSize)/1000000.0 ) );
-#endif
-			allocationSizes.push_back(allocationSize);
-		}
-	}
-
-	MPI_Barrier(MPI_COMM_WORLD);
-
-	if (do_gpu && ! node->isLeader())
-	{
-		for (int i = 0; i < accDataBundles.size(); i ++)
-			((MlDeviceBundle*)accDataBundles[i])->setupTunableSizedObjects(allocationSizes[i]);
-	}
-#endif // _CUDA_ENABLED or _HIP_ENABLED
-#ifdef _SYCL_ENABLED
-	if (do_sycl && ! node->isLeader())
-	{
-		char* pEnvStream = std::getenv("relionSyclUseStream");
-		std::string strStream = (pEnvStream == nullptr) ? "0" : pEnvStream;
-		std::transform(strStream.begin(), strStream.end(), strStream.begin(), [](unsigned char c){return static_cast<char>(std::tolower(c));});
-		const bool isStream = (strStream == "1" || strStream == "on") ? true : false;
-
-		for (int i = 0; i < gpuDevices.size(); i++)
-		{
-			accDataBundles.push_back((void*)(new MlSyclDataBundle(syclDeviceList[gpuDevices[i]])));
-			((MlSyclDataBundle*)accDataBundles[i])->setup(this);
-		}
-
-		for (int i = 0; i < gpuOptimiserDeviceMap.size(); i++)
-		{
-			MlOptimiserSYCL *b = new MlOptimiserSYCL(this, (MlSyclDataBundle*)accDataBundles[gpuOptimiserDeviceMap[i]], isStream, "sycl_optimiser");
-			b->resetData();
-			b->threadID = i;
-			gpuOptimisers.push_back((void*)b);
-		}
-	}
-#endif
-#ifdef ALTCPU
-	/************************************************************************/
-	//CPU memory setup
-	if (do_cpu  && ! node->isLeader())
-	{
-		unsigned nr_classes = mymodel.PPref.size();
-		// Allocate Array of complex arrays for this class
-		if (posix_memalign((void **)&mdlClassComplex, MEM_ALIGN, nr_classes * sizeof (std::complex<XFLOAT> *)))
-			CRITICAL(RAMERR);
-
-		// Set up XFLOAT complex array shared by all threads for each class
-		for (int iclass = 0; iclass < nr_classes; iclass++)
-		{
-			int mdlX = mymodel.PPref[iclass].data.xdim;
-			int mdlY = mymodel.PPref[iclass].data.ydim;
-			int mdlZ = mymodel.PPref[iclass].data.zdim;
-			size_t mdlXYZ;
-			if(mdlZ == 0)
-				mdlXYZ = (size_t)mdlX*(size_t)mdlY;
-			else
-				mdlXYZ = (size_t)mdlX*(size_t)mdlY*(size_t)mdlZ;
-
-			try
-			{
-				mdlClassComplex[iclass] = new std::complex<XFLOAT>[mdlXYZ];
-			}
-			catch (std::bad_alloc& ba)
-			{
-				CRITICAL(RAMERR);
-			}
-
-			std::complex<XFLOAT> *pData = mdlClassComplex[iclass];
-
-			// Copy results into complex number array
-			for (size_t i = 0; i < mdlXYZ; i ++)
-			{
-				std::complex<XFLOAT> arrayval(
-					(XFLOAT) mymodel.PPref[iclass].data.data[i].real,
-					(XFLOAT) mymodel.PPref[iclass].data.data[i].imag
-				);
-				pData[i] = arrayval;
-			}
-		}
-
-		MlDataBundle *b = new MlDataBundle();
-		b->setup(this);
-		accDataBundles.push_back((void*)b);
-	}  // do_cpu
-#endif // ALTCPU
-	/************************************************************************/
+	// F. Accelerator setup (CUDA/HIP/SYCL/CPU)
+	setupAccelerators();
 
 #ifdef MKLFFT
 	// Single-threaded FFTW execution for code inside parallel processing loop
@@ -1346,542 +1895,11 @@ void MlOptimiserMpi::expectation()
 	timer.toc(TIMING_EXP_4);
 #endif
 	long int my_nr_particles = (subset_size > 0) ? subset_size : mydata.numberOfParticles();
+	MultidimArray<long int> job_buf(6);
 	if (node->isLeader())
-	{
-#ifdef TIMING
-		timer.tic(TIMING_EXP_5);
-#endif
-		try
-		{
-			long int progress_bar_step_size = XMIPP_MAX(1, my_nr_particles / 60);
-			long int prev_barstep = 0;
-			long int my_first_particle = 0.;
-			long int my_last_particle = my_nr_particles - 1;
-			long int my_first_particle_halfset1 = 0;
-			long int my_last_particle_halfset1 = mydata.numberOfParticles(1) - 1;
-			long int my_first_particle_halfset2 = mydata.numberOfParticles(1);
-			long int my_last_particle_halfset2 = mydata.numberOfParticles() - 1;
-
-			if (subset_size > 0)
-			{
-				my_last_particle_halfset1 = my_nr_particles;
-				my_last_particle_halfset2 = mydata.numberOfParticles(1) + my_nr_particles;
-
-			}
-
-			if (verb > 0)
-			{
-				if (do_grad)
-				{
-					std::cout << " Gradient optimisation iteration " << iter;
-					if (!do_auto_refine)
-						std::cout << " of " << nr_iter;
-					if (my_nr_particles < mydata.numberOfParticles())
-						std::cout << " with " << my_nr_particles << " particles";
-					std::cout << " (Step size " << (float) ( (int) (grad_current_stepsize * 100 + .5) ) / 100 << ")";
-				}
-				else
-				{
-					std::cout << " Expectation iteration " << iter;
-					if (!do_auto_refine)
-						std::cout << " of " << nr_iter;
-					if (my_nr_particles < mydata.numberOfParticles())
-						std::cout << " (with " << my_nr_particles << " particles)";
-				}
-				std::cout << std::endl;
-				init_progress_bar(my_nr_particles);
-			}
-
-			// Leader distributes all packages of SomeParticles
-			int nr_followers_done = 0;
-			int random_halfset = 0;
-			long int nr_particles_todo, nr_particles_done = 0;
-			long int nr_particles_done_halfset1 = 0;
-			long int nr_particles_done_halfset2 = 0;
-			long int my_nr_particles_done = 0;
-
-
-			// SHWS10052021: reduce frequency of abort check 10-fold
-			long int icheck= 0;
-			while (nr_followers_done < node->size - 1)
-			{
-
-				if (icheck%10 == 0)
-				{
-					if (pipeline_control_check_abort_job()) MPI_Abort(MPI_COMM_WORLD, RELION_EXIT_ABORTED);
-				}
-				icheck++;
-
-				// Receive a job request from a follower
-				node->relion_MPI_Recv(MULTIDIM_ARRAY(first_last_nr_images), MULTIDIM_SIZE(first_last_nr_images), MPI_LONG, MPI_ANY_SOURCE, MPITAG_JOB_REQUEST, MPI_COMM_WORLD, status);
-				// Which follower sent this request?
-				int this_follower = status.MPI_SOURCE;
-
-//#define DEBUG_MPIEXP2
-#ifdef DEBUG_MPIEXP2
-				std::cerr << " MASTER RECEIVING from follower= " << this_follower<< " JOB_FIRST= " << JOB_FIRST << " JOB_LAST= " << JOB_LAST
-						<< " JOB_NIMG= "<<JOB_NIMG<< " JOB_NPAR= "<<JOB_NPAR<< std::endl;
-#endif
-				// The first time a follower reports it only asks for input, but does not send output of a previous processing task. In that case JOB_NIMG==0
-				// Otherwise, the leader needs to receive and handle the updated metadata from the followers
-				if (JOB_NIMG > 0)
-				{
-					exp_metadata.resize(JOB_NIMG, METADATA_LINE_LENGTH_BEFORE_BODIES + (mymodel.nr_bodies) * METADATA_NR_BODY_PARAMS);
-					node->relion_MPI_Recv(MULTIDIM_ARRAY(exp_metadata), MULTIDIM_SIZE(exp_metadata), MY_MPI_DOUBLE, this_follower, MPITAG_METADATA, MPI_COMM_WORLD, status);
-
-					// The leader monitors the changes in the optimal orientations and classes
-					monitorHiddenVariableChanges(JOB_FIRST, JOB_LAST);
-
-					// The leader then updates the mydata.MDimg table
-					MlOptimiser::setMetaDataSubset(JOB_FIRST, JOB_LAST);
-					if (verb > 0 && nr_particles_done - prev_barstep> progress_bar_step_size)
-					{
-						prev_barstep = nr_particles_done;
-						if (subset_size > 0 && do_split_random_halves)
-							progress_bar(nr_particles_done/2);
-						else
-							progress_bar(nr_particles_done + JOB_NPAR);
-					}
-				}
-
-				// See which random_halfset this follower belongs to, and keep track of the number of particles that have been processed already
-				if (do_split_random_halves)
-				{
-					random_halfset = (this_follower % 2 == 1) ? 1 : 2;
-					if (random_halfset == 1)
-					{
-						my_nr_particles_done = nr_particles_done_halfset1;
-						nr_particles_todo = my_last_particle_halfset1 - my_first_particle_halfset1 + 1;
-						JOB_FIRST = nr_particles_done_halfset1;
-						JOB_LAST  = XMIPP_MIN(my_last_particle_halfset1, JOB_FIRST + nr_pool - 1);
-					}
-					else
-					{
-						my_nr_particles_done = nr_particles_done_halfset2;
-						nr_particles_todo = my_last_particle_halfset2 - my_first_particle_halfset2 + 1;
-						JOB_FIRST = mydata.numberOfParticles(1) + nr_particles_done_halfset2;
-						JOB_LAST  = XMIPP_MIN(my_last_particle_halfset2, JOB_FIRST + nr_pool - 1);
-					}
-				}
-				else
-				{
-					random_halfset = 0;
-					my_nr_particles_done = nr_particles_done;
-					nr_particles_todo =  my_last_particle - my_first_particle + 1;
-					JOB_FIRST = nr_particles_done;
-					JOB_LAST  = XMIPP_MIN(my_last_particle, JOB_FIRST + nr_pool - 1);
-				}
-
-				// Now send out a new job
-				if (my_nr_particles_done < nr_particles_todo)
-				{
-					MlOptimiser::getMetaAndImageDataSubset(JOB_FIRST, JOB_LAST, !do_parallel_disc_io);
-					JOB_NIMG = YSIZE(exp_metadata);
-					JOB_LEN_FN_IMG = exp_fn_img.length() + 1; // +1 to include \0 at the end of the string
-					JOB_LEN_FN_CTF = exp_fn_ctf.length() + 1;
-					JOB_LEN_FN_RECIMG = exp_fn_recimg.length() + 1;
-				}
-				else
-				{
-					// There are no more particles in the list
-					JOB_FIRST = -1;
-					JOB_LAST = -1;
-					JOB_NIMG = 0;
-					JOB_LEN_FN_IMG = 0;
-					JOB_LEN_FN_CTF = 0;
-					JOB_LEN_FN_RECIMG = 0;
-					exp_metadata.clear();
-					exp_imagedata.clear();
-
-					// No more particles, this follower is done now
-					nr_followers_done++;
-				}
-
-				//std::cerr << "subset= " << subset << " half-set= " << random_halfset
-				//		<< " nr_subset_particles_done= " << nr_subset_particles_done
-				//		<< " nr_particles_todo=" << nr_particles_todo << " JOB_FIRST= " << JOB_FIRST << " JOB_LAST= " << JOB_LAST << std::endl;
-
-#ifdef DEBUG_MPIEXP2
-				std::cerr << " MASTER SENDING to follower= " << this_follower<< " JOB_FIRST= " << JOB_FIRST << " JOB_LAST= " << JOB_LAST
-								<< " JOB_NIMG= "<<JOB_NIMG<< " JOB_NPAR= "<<JOB_NPAR<< std::endl;
-#endif
-				node->relion_MPI_Send(MULTIDIM_ARRAY(first_last_nr_images), MULTIDIM_SIZE(first_last_nr_images), MPI_LONG, this_follower, MPITAG_JOB_REPLY, MPI_COMM_WORLD);
-
-				//806 Leader also sends the required metadata and imagedata for this job
-				if (JOB_NIMG > 0)
-				{
-					node->relion_MPI_Send(MULTIDIM_ARRAY(exp_metadata), MULTIDIM_SIZE(exp_metadata), MY_MPI_DOUBLE, this_follower, MPITAG_METADATA, MPI_COMM_WORLD);
-					if (do_parallel_disc_io)
-					{
-						node->relion_MPI_Send((void*)exp_fn_img.c_str(), JOB_LEN_FN_IMG, MPI_CHAR, this_follower, MPITAG_METADATA, MPI_COMM_WORLD);
-						// Send filenames of images to the followers
-						if (JOB_LEN_FN_CTF > 1)
-							node->relion_MPI_Send((void*)exp_fn_ctf.c_str(), JOB_LEN_FN_CTF, MPI_CHAR, this_follower, MPITAG_METADATA, MPI_COMM_WORLD);
-						if (JOB_LEN_FN_RECIMG > 1)
-							node->relion_MPI_Send((void*)exp_fn_recimg.c_str(), JOB_LEN_FN_RECIMG, MPI_CHAR, this_follower, MPITAG_METADATA, MPI_COMM_WORLD);
-					}
-					else
-					{
-						// new in 3.1: first send the image_size of these particles (as no longer necessarily the same as mymodel.ori_size...)
-						int my_image_size = mydata.getOpticsImageSize(mydata.getOpticsGroup(JOB_FIRST));
-						node->relion_MPI_Send(&my_image_size, 1, MPI_INT, this_follower, MPITAG_IMAGE_SIZE, MPI_COMM_WORLD);
-
-						// Send imagedata to the followers
-						node->relion_MPI_Send(MULTIDIM_ARRAY(exp_imagedata), MULTIDIM_SIZE(exp_imagedata), MY_MPI_DOUBLE, this_follower, MPITAG_IMAGE, MPI_COMM_WORLD);
-					}
-				}
-
-				// Update the total number of particles that has been done already
-				nr_particles_done += JOB_NPAR;
-				if (do_split_random_halves)
-				{
-					// Also update the number of particles that has been done for each subset
-					if (random_halfset == 1)
-					{
-						nr_particles_done_halfset1 += JOB_NPAR;
-					}
-					else
-					{
-						nr_particles_done_halfset2 += JOB_NPAR;
-					}
-				}
-			}
-		}
-		catch (RelionError XE)
-		{
-			std::cerr << "leader encountered error: " << XE;
-			MPI_Abort(MPI_COMM_WORLD, RELION_EXIT_FAILURE);
-		}
-#ifdef TIMING
-		timer.toc(TIMING_EXP_5);
-#endif
-	}
-	else  // if not Leader
-	{
-#ifdef TIMING
-		timer.tic(TIMING_EXP_6);
-#endif
-		try
-		{
-			if (halt_all_followers_except_this > 0)
-			{
-				// Let all followers except this one sleep forever
-				if (node->rank != halt_all_followers_except_this)
-					while (true)
-						sleep(1000);
-			}
-
-			// Followers do the real work (The follower does not need to know to which random_halfset he belongs)
-			// Start off with an empty job request
-			JOB_FIRST = 0;
-			JOB_LAST = -1; // So that initial nr_particles (=JOB_LAST-JOB_FIRST+1) is zero!
-			JOB_NIMG = 0;
-			JOB_LEN_FN_IMG = 0;
-			JOB_LEN_FN_CTF = 0;
-			JOB_LEN_FN_RECIMG = 0;
-			node->relion_MPI_Send(MULTIDIM_ARRAY(first_last_nr_images), MULTIDIM_SIZE(first_last_nr_images), MPI_LONG, 0, MPITAG_JOB_REQUEST, MPI_COMM_WORLD);
-
-			while (true)
-			{
-#ifdef TIMING
-				timer.tic(TIMING_MPISLAVEWAIT1);
-#endif
-				//Receive a new bunch of particles
-				node->relion_MPI_Recv(MULTIDIM_ARRAY(first_last_nr_images), MULTIDIM_SIZE(first_last_nr_images), MPI_LONG, 0, MPITAG_JOB_REPLY, MPI_COMM_WORLD, status);
-#ifdef TIMING
-				timer.toc(TIMING_MPISLAVEWAIT1);
-#endif
-
-				//Check whether I am done
-				if (JOB_NIMG <= 0)
-				{
-#ifdef DEBUG
-					std::cerr <<" follower "<< node->rank << " has finished expectation.."<<std::endl;
-#endif
-					exp_imagedata.clear();
-					exp_metadata.clear();
-					break;
-				}
-				else
-				{
-#ifdef TIMING
-					timer.tic(TIMING_MPISLAVEWAIT2);
-#endif
-					// Also receive the imagedata and the metadata for these images from the leader
-					exp_metadata.resize(JOB_NIMG, METADATA_LINE_LENGTH_BEFORE_BODIES + (mymodel.nr_bodies) * METADATA_NR_BODY_PARAMS);
-					node->relion_MPI_Recv(MULTIDIM_ARRAY(exp_metadata), MULTIDIM_SIZE(exp_metadata), MY_MPI_DOUBLE, 0, MPITAG_METADATA, MPI_COMM_WORLD, status);
-
-					// Receive the image filenames or the exp_imagedata
-					if (do_parallel_disc_io)
-					{
-						// Resize the exp_fn_img strings
-						char* rec_buf;
-						rec_buf = (char *) malloc(JOB_LEN_FN_IMG);
-						node->relion_MPI_Recv(rec_buf, JOB_LEN_FN_IMG, MPI_CHAR, 0, MPITAG_METADATA, MPI_COMM_WORLD, status);
-						exp_fn_img = rec_buf;
-						free(rec_buf);
-						if (JOB_LEN_FN_CTF > 1)
-						{
-							char* rec_buf2;
-							rec_buf2 = (char *) malloc(JOB_LEN_FN_CTF);
-							node->relion_MPI_Recv(rec_buf2, JOB_LEN_FN_CTF, MPI_CHAR, 0, MPITAG_METADATA, MPI_COMM_WORLD, status);
-							exp_fn_ctf = rec_buf2;
-							free(rec_buf2);
-						}
-						if (JOB_LEN_FN_RECIMG > 1)
-						{
-							char* rec_buf3;
-							rec_buf3 = (char *) malloc(JOB_LEN_FN_RECIMG);
-							node->relion_MPI_Recv(rec_buf3, JOB_LEN_FN_RECIMG, MPI_CHAR, 0, MPITAG_METADATA, MPI_COMM_WORLD, status);
-							exp_fn_recimg = rec_buf3;
-							free(rec_buf3);
-						}
-					}
-					else
-					{
-						int mysize;
-						node->relion_MPI_Recv(&mysize, 1, MPI_INT, 0, MPITAG_IMAGE_SIZE, MPI_COMM_WORLD, status);
-						// resize the exp_imagedata array
-						if (mymodel.data_dim == 3)
-						{
-							if (do_ctf_correction)
-							{
-								if (has_converged && do_use_reconstruct_images)
-									exp_imagedata.resize(3*mysize, mysize, mysize);
-								else
-									exp_imagedata.resize(2*mysize, mysize, mysize);
-							}
-							else
-							{
-								if (has_converged && do_use_reconstruct_images)
-									exp_imagedata.resize(2*mysize, mysize, mysize);
-								else
-									exp_imagedata.resize(mysize, mysize, mysize);
-							}
-						}
-						else
-						{
-							if (has_converged && do_use_reconstruct_images)
-								exp_imagedata.resize(2*JOB_NIMG, mysize, mysize);
-							else
-								exp_imagedata.resize(JOB_NIMG, mysize, mysize);
-						}
-						node->relion_MPI_Recv(MULTIDIM_ARRAY(exp_imagedata), MULTIDIM_SIZE(exp_imagedata), MY_MPI_DOUBLE, 0, MPITAG_IMAGE, MPI_COMM_WORLD, status);
-					}
-
-					// Now process these images
-#ifdef DEBUG_MPIEXP
-					std::cerr << " SLAVE EXECUTING node->rank= " << node->rank << " JOB_FIRST= " << JOB_FIRST << " JOB_LAST= " << JOB_LAST << std::endl;
-#endif
-#ifdef TIMING
-					timer.toc(TIMING_MPISLAVEWAIT2);
-					timer.tic(TIMING_MPISLAVEWORK);
-#endif
-					expectationSomeParticles(JOB_FIRST, JOB_LAST);
-#ifdef TIMING
-					timer.toc(TIMING_MPISLAVEWORK);
-					timer.tic(TIMING_MPISLAVEWAIT3);
-#endif
-
-					// Report to the leader how many particles I have processed
-					node->relion_MPI_Send(MULTIDIM_ARRAY(first_last_nr_images), MULTIDIM_SIZE(first_last_nr_images), MPI_LONG, 0, MPITAG_JOB_REQUEST, MPI_COMM_WORLD);
-					// Also send the metadata belonging to those
-					node->relion_MPI_Send(MULTIDIM_ARRAY(exp_metadata), MULTIDIM_SIZE(exp_metadata), MY_MPI_DOUBLE, 0, MPITAG_METADATA, MPI_COMM_WORLD);
-
-#ifdef TIMING
-					timer.toc(TIMING_MPISLAVEWAIT3);
-#endif
-				}
-			}
-//		TODO: define MPI_COMM_SLAVES!!!!	MPI_Barrier(node->MPI_COMM_SLAVES);
-
-#if defined _CUDA_ENABLED || defined _HIP_ENABLED
-			if (do_gpu)
-			{
-				for (int i = 0; i < accDataBundles.size(); i ++)
-				{
-#ifdef TIMING
-		timer.tic(TIMING_EXP_7);
-#endif
-					MlDeviceBundle* b = ((MlDeviceBundle*)accDataBundles[i]);
-					b->syncAllBackprojects();
-
-					for (int j = 0; j < b->projectors.size(); j++)
-						b->projectors[j].clear();
-
-					for (int j = 0; j < b->backprojectors.size(); j++)
-					{
-						unsigned long s = wsum_model.BPref[j].data.nzyxdim;
-						XFLOAT *reals = new XFLOAT[s];
-						XFLOAT *imags = new XFLOAT[s];
-						XFLOAT *weights = new XFLOAT[s];
-
-						b->backprojectors[j].getMdlData(reals, imags, weights);
-
-						for (unsigned long n = 0; n < s; n++)
-						{
-							wsum_model.BPref[j].data.data[n].real += (RFLOAT) reals[n];
-							wsum_model.BPref[j].data.data[n].imag += (RFLOAT) imags[n];
-							wsum_model.BPref[j].weight.data[n] += (RFLOAT) weights[n];
-						}
-
-						delete [] reals;
-						delete [] imags;
-						delete [] weights;
-
-						b->backprojectors[j].clear();
-					}
-
-					for (int j = 0; j < b->coarseProjectionPlans.size(); j++)
-						b->coarseProjectionPlans[j].clear();
-#ifdef TIMING
-		timer.toc(TIMING_EXP_7);
-#endif
-				}
-#ifdef TIMING
-		timer.tic(TIMING_EXP_8);
-#endif
-				for (int i = 0; i < gpuOptimisers.size(); i ++)
-					delete (MlOptimiserAccGPU*) gpuOptimisers[i];
-
-				gpuOptimisers.clear();
-
-
-				for (int i = 0; i < accDataBundles.size(); i ++)
-				{
-
-					((MlDeviceBundle*)accDataBundles[i])->allocator->syncReadyEvents();
-					((MlDeviceBundle*)accDataBundles[i])->allocator->freeReadyAllocs();
-
-#if defined DEBUG_CUDA || defined DEBUG_HIP
-					if (((MlDeviceBundle*) accDataBundles[i])->allocator->getNumberOfAllocs() != 0)
-					{
-						printf("DEBUG_ERROR: Non-zero allocation count encountered in custom allocator between iterations.\n");
-						((MlDeviceBundle*) accDataBundles[i])->allocator->printState();
-						fflush(stdout);
-						CRITICAL(ERR_CANZ);
-					}
-#endif
-				}
-
-				for (int i = 0; i < accDataBundles.size(); i ++)
-					delete (MlDeviceBundle*) accDataBundles[i];
-
-				accDataBundles.clear();
-#ifdef TIMING
-		timer.toc(TIMING_EXP_8);
-#endif
-			}
-#endif // DEBUG_CUDA or DEBUG_HIP
-#ifdef _SYCL_ENABLED
-			/************************************************************************/
-			if (do_sycl)
-			{
-				for (int i = 0; i < accDataBundles.size(); i++)
-				{
-					MlSyclDataBundle *b = (MlSyclDataBundle*)accDataBundles[i];
-					b->syncAllBackprojects();
-
-					for (int j = 0; j < b->projectors.size(); j++)
-						b->projectors[j].clear();
-
-					for (int j = 0; j < b->backprojectors.size(); j++)
-					{
-						unsigned long s = wsum_model.BPref[j].data.nzyxdim;
-						deviceStream_t stream = b->backprojectors[j].stream;
-						XFLOAT *reals = (XFLOAT*)(stream->syclMalloc(s * sizeof(XFLOAT), syclMallocType::host));
-						XFLOAT *imags = (XFLOAT*)(stream->syclMalloc(s * sizeof(XFLOAT), syclMallocType::host));
-						XFLOAT *weights = (XFLOAT*)(stream->syclMalloc(s * sizeof(XFLOAT), syclMallocType::host));
-
-						b->backprojectors[j].getMdlData(reals, imags, weights);
-
-						for (unsigned long n = 0; n < s; n++)
-						{
-							wsum_model.BPref[j].data.data[n].real += (RFLOAT) reals[n];
-							wsum_model.BPref[j].data.data[n].imag += (RFLOAT) imags[n];
-							wsum_model.BPref[j].weight.data[n] += (RFLOAT) weights[n];
-						}
-
-						stream->syclFree(reals);
-						stream->syclFree(imags);
-						stream->syclFree(weights);
-
-						b->backprojectors[j].clear();
-					}
-
-					for (int j = 0; j < b->coarseProjectionPlans.size(); j++)
-						b->coarseProjectionPlans[j].clear();
-				}
-
-				for (int i = 0; i < gpuOptimisers.size(); i++)
-					delete (MlOptimiserSYCL*)gpuOptimisers[i];
-
-				gpuOptimisers.clear();
-
-				for (int i = 0; i < accDataBundles.size(); i++)
-					delete (MlSyclDataBundle*)accDataBundles[i];
-
-				accDataBundles.clear();
-			}
-#endif
-#ifdef ALTCPU
-			if (do_cpu)
-			{
-				MlDataBundle* b = (MlDataBundle*) accDataBundles[0];
-
-#ifdef DEBUG
-				std::cerr << "Faux thread id: " << b->thread_id << std::endl;
-#endif
-
-				for (int j = 0; j < b->projectors.size(); j++)
-					b->projectors[j].clear();
-
-				for (int j = 0; j < b->backprojectors.size(); j++)
-				{
-					unsigned long s = wsum_model.BPref[j].data.nzyxdim;
-					XFLOAT *reals = NULL;
-					XFLOAT *imags = NULL;
-					XFLOAT *weights = NULL;
-
-					b->backprojectors[j].getMdlDataPtrs(reals, imags, weights);
-
-					for (unsigned long n = 0; n < s; n++)
-					{
-						wsum_model.BPref[j].data.data[n].real += (RFLOAT) reals[n];
-						wsum_model.BPref[j].data.data[n].imag += (RFLOAT) imags[n];
-						wsum_model.BPref[j].weight.data[n] += (RFLOAT) weights[n];
-					}
-
-					b->backprojectors[j].clear();
-				}
-
-				for (int j = 0; j < b->coarseProjectionPlans.size(); j++)
-					b->coarseProjectionPlans[j].clear();
-
-				delete b;
-				accDataBundles.clear();
-
-				// Now clean up
-				unsigned nr_classes = mymodel.nr_classes;
-				for (int iclass = 0; iclass < nr_classes; iclass++)
-				{
-					delete [] mdlClassComplex[iclass];
-				}
-				free(mdlClassComplex);
-
-				tbbCpuOptimiser.clear();
-			}
-#endif  // ALTCPU
-		}
-		catch (RelionError XE)
-		{
-			std::cerr << "follower "<< node->rank << " encountered error: " << XE;
-			MPI_Abort(MPI_COMM_WORLD, RELION_EXIT_FAILURE);
-		}
-#ifdef TIMING
-		timer.toc(TIMING_EXP_6);
-#endif
-	}  // Follower node
+		runLeaderExpectationLoop(job_buf, my_nr_particles);
+	else
+		runFollowerExpectationLoop(job_buf);
 
 #ifdef  MKLFFT
 	// Allow parallel FFTW execution to continue now that we are outside the parallel

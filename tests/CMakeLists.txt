@@ -1,20 +1,26 @@
-add_executable(tests
-		tests.cpp
-	)
+# -------------------------------------------------------GoogleTest MPI smoke tests--
+include(FetchContent)
+FetchContent_Declare(
+    googletest
+    URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.tar.gz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+# Prevent GoogleTest from overriding our compiler/linker settings.
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googletest)
 
-add_dependencies(tests relion_lib)
-target_link_libraries(tests relion_lib)
-target_link_libraries(tests ${FFTW_LIBRARIES})
-target_link_libraries(tests ${TIFF_LIBRARIES})
-
-#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++14")
-
-include_directories(tests PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/tests)
-include_directories(tests PRIVATE ${FFTW_INCLUDES})
-
-find_package(OpenMP)
-if (OPENMP_FOUND)
-	set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
-	set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
-	set (CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
-endif()
+add_executable(test_expectation_mpi
+    ${CMAKE_SOURCE_DIR}/tests/test_expectation_mpi.cpp
+)
+add_dependencies(test_expectation_mpi relion_lib)
+target_compile_definitions(test_expectation_mpi PRIVATE RELION_UNIT_TESTS)
+target_include_directories(test_expectation_mpi PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${FFTW_INCLUDES}
+)
+target_link_libraries(test_expectation_mpi
+    GTest::gtest
+    relion_lib
+    MPI::MPI_CXX
+    ${FFTW_LIBRARIES}
+)

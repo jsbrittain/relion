@@ -22,6 +22,9 @@
 #define ML_OPTIMISER_MPI_H_
 #include "src/mpi.h"
 #include "src/ml_optimiser.h"
+#ifdef RELION_UNIT_TESTS
+#include "gtest/gtest_prod.h"
+#endif
 
 // definition of MPITAG has been moved to header mpi.h
 
@@ -140,8 +143,19 @@ public:
      */
     void iterate();
 
-#ifdef _SYCL_ENABLED
 private:
+    void setupAccelerators();
+    void runLeaderExpectationLoop(MultidimArray<long int>& job_buf, long int my_nr_particles);
+    void runFollowerExpectationLoop(MultidimArray<long int>& job_buf);
+
+#ifdef RELION_UNIT_TESTS
+    // Grant access to the private extracted methods from unit tests.
+    // FRIEND_TEST expands to: friend class SuiteName_CaseName_Test
+    FRIEND_TEST(ExpectationRefactorMpiTest, SetupAcceleratorsNoOp);
+    FRIEND_TEST(ExpectationRefactorMpiTest, ZeroParticleDispatch);
+#endif
+
+#ifdef _SYCL_ENABLED
 	int syclDevicePerRank;
 #endif
 
