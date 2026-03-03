@@ -15,28 +15,41 @@
 #include "src/acc/acc_backprojector.h"
 #include "src/acc/cpu/mkl_fft.h"
 #include "src/acc/cpu/cpu_benchmark_utils.h"
+#include "src/acc/acc_bundle.h"
+#include "src/acc/acc_optimiser.h"
 #include <stack>
 
 #include "src/acc/acc_ml_optimiser.h"
 #include "src/acc/acc_ptr.h"
 
-class MlDataBundle
+class MlDataBundle : public AccBundle
 {
 public:
-	//The CPU accelerated projector set
-	std::vector< AccProjector > projectors;
-
-	//The CPU accelerated back-projector set
-	std::vector< AccBackprojector > backprojectors;
-
-	//Used for precalculations of projection setup
-	bool generateProjectionPlanOnTheFly;
-	std::vector< AccProjectorPlan > coarseProjectionPlans;
-
 	void setup(MlOptimiser *baseMLO);
 
-	MlDataBundle() : generateProjectionPlanOnTheFly {false}
-	{}
+	void extractAndAccumulate(MlWsumModel &wsum) override
+	{
+		for (int j = 0; j < (int)backprojectors.size(); j++)
+		{
+			unsigned long s = wsum.BPref[j].data.nzyxdim;
+			XFLOAT *reals   = NULL;
+			XFLOAT *imags   = NULL;
+			XFLOAT *weights = NULL;
+
+			backprojectors[j].getMdlDataPtrs(reals, imags, weights);
+
+			for (unsigned long n = 0; n < s; n++)
+			{
+				wsum.BPref[j].data.data[n].real   += (RFLOAT) reals[n];
+				wsum.BPref[j].data.data[n].imag   += (RFLOAT) imags[n];
+				wsum.BPref[j].weight.data[n]       += (RFLOAT) weights[n];
+			}
+
+			backprojectors[j].clear();
+		}
+	}
+
+	MlDataBundle() { generateProjectionPlanOnTheFly = false; }
 
 	~MlDataBundle()
 	{
@@ -46,7 +59,7 @@ public:
 };
 
 
-class MlOptimiserCpu
+class MlOptimiserCpu : public AccOptimiser
 {
 public:
 	// transformer as holder for reuse of fftw_plans
@@ -90,12 +103,17 @@ public:
 			classStreams(0)
 	{
 	};
-	
-	void resetData();
+
+	void resetData() override;
 
     void expectationOneParticle(unsigned long my_ori_particle, int thread_id);
-	
-	void *getAllocator()	
+
+	void doThreadExpectationSomeParticles(int tid) override
+	{
+		expectationOneParticle(tid, tid);
+	}
+
+	void *getAllocator()
 	{
 		return nullptr;
 	};

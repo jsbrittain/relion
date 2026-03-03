@@ -44,28 +44,14 @@
 #include "src/error.h"
 #include "src/ml_optimiser.h"
 #ifdef _CUDA_ENABLED
-#include "src/acc/cuda/cuda_ml_optimiser.h"
 #ifdef CUDA_PROFILING
 #include <nvtx3/nvToolsExt.h>
 #include <cuda_profiler_api.h>
 #endif
 #elif _HIP_ENABLED
-#include "src/acc/hip/hip_ml_optimiser.h"
 #include <roctracer/roctx.h>
-#elif _SYCL_ENABLED
-	#include <cstdlib>
-	#include <cstring>
-	#include <tuple>
-	#include <algorithm>
-    #include "src/acc/sycl/sycl_ml_optimiser.h"
-#elif ALTCPU
-    #include <atomic>
-    #include <tbb/tbb.h>
-    #include <tbb/parallel_for.h>
-    #define TBB_PREVIEW_GLOBAL_CONTROL 1
-    #include <tbb/global_control.h>
-    #include "src/acc/cpu/cpu_ml_optimiser.h"
 #endif
+#include "src/acc/acc_backend_factory.h"
 
 #define NR_CLASS_MUTEXES 5
 
@@ -81,11 +67,9 @@ void globalThreadExpectationSomeParticles(void *self, int thread_id)
 
     try
     {
-#if defined _CUDA_ENABLED || defined _HIP_ENABLED || defined _SYCL_ENABLED
-        if (MLO->do_gpu || MLO->do_sycl)
-            ((MlOptimiserAccGPU*) MLO->gpuOptimisers[thread_id])->doThreadExpectationSomeParticles(thread_id);
+        if (!MLO->accOptimisers.empty())
+            MLO->accOptimisers[thread_id]->doThreadExpectationSomeParticles(thread_id);
         else
-#endif
             MLO->doThreadExpectationSomeParticles(thread_id);
     }
     catch (RelionError XE)
@@ -96,18 +80,19 @@ void globalThreadExpectationSomeParticles(void *self, int thread_id)
     }
 }
 
-#ifdef _SYCL_ENABLED
 MlOptimiser::~MlOptimiser()
 {
-	for (int i = 0; i < syclDeviceList.size(); i++)
-	{
-		syclDeviceList[i]->destroyMemoryPool();
-		delete syclDeviceList[i];
-	}
-
-	syclDeviceList.clear();
-}
+#ifdef _SYCL_ENABLED
+    for (int i = 0; i < (int)syclDeviceList.size(); i++)
+    {
+        syclDeviceList[i]->destroyMemoryPool();
+        delete syclDeviceList[i];
+    }
+    syclDeviceList.clear();
 #endif
+    delete accBackend;
+    accBackend = nullptr;
+}
 
 /** ========================== I/O operations  =========================== */
 
@@ -3568,140 +3553,12 @@ void MlOptimiser::expectation()
     std::cerr << "Expectation: done setupCheckMemory" << std::endl;
 #endif
 
-#if defined _CUDA_ENABLED || _HIP_ENABLED
     /************************************************************************/
-    //GPU memory setup
-
-    if (do_gpu)
-    {
-        for (int i = 0; i < gpuDevices.size(); i ++)
-        {
-            MlDeviceBundle *b = new MlDeviceBundle(this);
-            b->setDevice(gpuDevices[i]);
-            b->setupFixedSizedObjects();
-            accDataBundles.push_back((void*)b);
-        }
-
-        std::vector<unsigned> threadcountOnDevice(accDataBundles.size(),0);
-
-        for (int i = 0; i < gpuOptimiserDeviceMap.size(); i ++)
-        {
-            std::stringstream didSs;
-            didSs << "RRt" << i;
-            MlOptimiserAccGPU *b = new MlOptimiserAccGPU(this, (MlDeviceBundle*) accDataBundles[gpuOptimiserDeviceMap[i]], didSs.str().c_str());
-            b->resetData();
-            gpuOptimisers.push_back((void*)b);
-            threadcountOnDevice[gpuOptimiserDeviceMap[i]] ++;
-        }
-
-        int devCount;
-        HANDLE_ERROR(accGPUGetDeviceCount(&devCount));
-        HANDLE_ERROR(accGPUDeviceSynchronize());
-        for (int i = 0; i < accDataBundles.size(); i ++)
-        {
-            if(((MlDeviceBundle*)accDataBundles[i])->device_id >= devCount || ((MlDeviceBundle*)accDataBundles[i])->device_id < 0 )
-            {
-                //std::cerr << " using device_id=" << ((MlDeviceBundle*)accDataBundles[i])->device_id << " (device no. " << ((MlDeviceBundle*)accDataBundles[i])->device_id+1 << ") which is not within the available device range" << devCount << std::endl;
-                CRITICAL(ERR_GPUID);
-            }
-            else
-                HANDLE_ERROR(accGPUSetDevice(((MlDeviceBundle*)accDataBundles[i])->device_id));
-            
-            size_t free, total, allocationSize;
-            HANDLE_ERROR(accGPUMemGetInfo( &free, &total ));
-
-            size_t required_free = requested_free_gpu_memory + GPU_THREAD_MEMORY_OVERHEAD_MB*1000*1000*threadcountOnDevice[i];
-
-            if (free < required_free)
-            {
-                printf("WARNING: Ignoring required free GPU memory amount of %zu MB, due to space insufficiency.\n", required_free/1000000);
-                allocationSize = (double)free *0.7;
-            }
-            else
-                allocationSize = free - required_free;
-
-            if (allocationSize < 200000000)
-                printf("WARNING: The available space on the GPU after initialization (%zu MB) might be insufficient for the expectation step.\n", allocationSize/1000000);
-
-#ifdef PRINT_GPU_MEM_INFO
-            printf("INFO: Projector model size %dx%dx%d\n", (int)mymodel.PPref[0].data.xdim, (int)mymodel.PPref[0].data.ydim, (int)mymodel.PPref[0].data.zdim );
-            printf("INFO: Free memory for Custom Allocator of device bundle %d is %d MB\n", i, (int) ( ((float)allocationSize)/1000000.0 ) );
-#endif
-
-            ((MlDeviceBundle*)accDataBundles[i])->setupTunableSizedObjects(allocationSize);
-        }
-    }
-#endif
-#ifdef _SYCL_ENABLED
-	if (do_sycl)
-	{
-		char* pEnvStream = std::getenv("relionSyclUseStream");
-		std::string strStream = (pEnvStream == nullptr) ? "0" : pEnvStream;
-		std::transform(strStream.begin(), strStream.end(), strStream.begin(), [](unsigned char c){return static_cast<char>(std::tolower(c));});
-		const bool isStream = (strStream == "1" || strStream == "on") ? true : false;
-
-		for (int i = 0; i < gpuDevices.size(); i++)
-		{
-			accDataBundles.push_back((void*)(new MlSyclDataBundle(syclDeviceList[gpuDevices[i]])));
-			((MlSyclDataBundle*)accDataBundles[i])->setup(this);
-		}
-
-		for (int i = 0; i < gpuOptimiserDeviceMap.size(); i++)
-		{
-			MlOptimiserSYCL *b = new MlOptimiserSYCL(this, (MlSyclDataBundle*)(accDataBundles[gpuOptimiserDeviceMap[i]]), isStream, "sycl_optimiser");
-			b->resetData();
-			b->threadID = i;
-			gpuOptimisers.push_back((void*)b);
-		}
-	}
-#endif
-#ifdef ALTCPU
-    if (do_cpu)
-    {
-        unsigned nr_classes = mymodel.PPref.size();
-        // Allocate Array of complex arrays for this class
-        if (posix_memalign((void **)&mdlClassComplex, MEM_ALIGN, nr_classes * sizeof (std::complex<XFLOAT> *)))
-            CRITICAL(RAMERR);
-
-        // Set up XFLOAT complex array shared by all threads for each class
-        for (int iclass = 0; iclass < nr_classes; iclass++)
-        {
-            int mdlX = mymodel.PPref[iclass].data.xdim;
-            int mdlY = mymodel.PPref[iclass].data.ydim;
-            int mdlZ = mymodel.PPref[iclass].data.zdim;
-            size_t mdlXYZ;
-            if(mdlZ == 0)
-                mdlXYZ = (size_t)mdlX*(size_t)mdlY;
-            else
-                mdlXYZ = (size_t)mdlX*(size_t)mdlY*(size_t)mdlZ;
-
-            try
-            {
-                mdlClassComplex[iclass] = new std::complex<XFLOAT>[mdlXYZ];
-            }
-            catch (std::bad_alloc& ba)
-            {
-                CRITICAL(RAMERR);
-            }
-
-            std::complex<XFLOAT> *pData = mdlClassComplex[iclass];
-
-            // Copy results into complex number array
-            for (size_t i = 0; i < mdlXYZ; i ++)
-            {
-                std::complex<XFLOAT> arrayval(
-                    (XFLOAT) mymodel.PPref[iclass].data.data[i].real,
-                    (XFLOAT) mymodel.PPref[iclass].data.data[i].imag
-                );
-                pData[i] = arrayval;
-            }
-        }
-
-        MlDataBundle *b = new MlDataBundle();
-        b->setup(this);
-        accDataBundles.push_back((void*)b);
-    }  // do_cpu
-#endif // ALTCPU
+    // Accelerator setup
+    accBackend = makeAccBackend(do_gpu, do_sycl, do_cpu).release();
+    accBackend->createBundles(*this);
+    accBackend->createOptimisers(*this);
+    accBackend->finalizeBundles(*this);
     /************************************************************************/
 
 #ifdef MKLFFT
@@ -3801,168 +3658,8 @@ void MlOptimiser::expectation()
     if (verb > 0)
         progress_bar(my_nr_particles);
 
-#if defined _CUDA_ENABLED || defined _HIP_ENABLED
-    if (do_gpu)
-    {
-        for (int i = 0; i < accDataBundles.size(); i ++)
-        {
-            MlDeviceBundle* b = ((MlDeviceBundle*)accDataBundles[i]);
-            b->syncAllBackprojects();
-
-            for (int j = 0; j < b->projectors.size(); j++)
-                b->projectors[j].clear();
-
-            for (int j = 0; j < b->backprojectors.size(); j++)
-            {
-                unsigned long s = wsum_model.BPref[j].data.nzyxdim;
-                XFLOAT *reals = new XFLOAT[s];
-                XFLOAT *imags = new XFLOAT[s];
-                XFLOAT *weights = new XFLOAT[s];
-
-                b->backprojectors[j].getMdlData(reals, imags, weights);
-
-                for (unsigned long n = 0; n < s; n++)
-                {
-                    wsum_model.BPref[j].data.data[n].real += (RFLOAT) reals[n];
-                    wsum_model.BPref[j].data.data[n].imag += (RFLOAT) imags[n];
-                    wsum_model.BPref[j].weight.data[n] += (RFLOAT) weights[n];
-                }
-
-                delete [] reals;
-                delete [] imags;
-                delete [] weights;
-
-                b->backprojectors[j].clear();
-            }
-
-            for (int j = 0; j < b->coarseProjectionPlans.size(); j++)
-                b->coarseProjectionPlans[j].clear();
-        }
-
-        for (int i = 0; i < gpuOptimisers.size(); i ++)
-            delete (MlOptimiserAccGPU*) gpuOptimisers[i];
-
-        gpuOptimisers.clear();
-
-
-        for (int i = 0; i < accDataBundles.size(); i ++)
-        {
-
-            ((MlDeviceBundle*)accDataBundles[i])->allocator->syncReadyEvents();
-            ((MlDeviceBundle*)accDataBundles[i])->allocator->freeReadyAllocs();
-
-#if defined DEBUG_CUDA || defined DEBUG_HIP
-            if (((MlDeviceBundle*) accDataBundles[i])->allocator->getNumberOfAllocs() != 0)
-            {
-                printf("DEBUG_ERROR: Non-zero allocation count encountered in custom allocator between iterations.\n");
-                ((MlDeviceBundle*) accDataBundles[i])->allocator->printState();
-                fflush(stdout);
-                CRITICAL(ERR_CANZ);
-            }
-
-#endif
-        }
-
-        for (int i = 0; i < accDataBundles.size(); i ++)
-            delete (MlDeviceBundle*) accDataBundles[i];
-
-        accDataBundles.clear();
-    }
-#endif
-#ifdef _SYCL_ENABLED
-	if (do_sycl)
-	{
-		for (int i = 0; i < accDataBundles.size(); i++)
-		{
-			MlSyclDataBundle *b = (MlSyclDataBundle*)accDataBundles[i];
-			b->syncAllBackprojects();
-
-			for (int j = 0; j < b->backprojectors.size(); j++)
-			{
-				unsigned long s = wsum_model.BPref[j].data.nzyxdim;
-				deviceStream_t stream = b->backprojectors[j].stream;
-				XFLOAT *reals = (XFLOAT*)(stream->syclMalloc(s * sizeof(XFLOAT), syclMallocType::host));
-				XFLOAT *imags = (XFLOAT*)(stream->syclMalloc(s * sizeof(XFLOAT), syclMallocType::host));
-				XFLOAT *weights = (XFLOAT*)(stream->syclMalloc(s * sizeof(XFLOAT), syclMallocType::host));
-
-				b->backprojectors[j].getMdlData(reals, imags, weights);
-
-				for (unsigned long n = 0; n < s; n++)
-				{
-					wsum_model.BPref[j].data.data[n].real += (RFLOAT) reals[n];
-					wsum_model.BPref[j].data.data[n].imag += (RFLOAT) imags[n];
-					wsum_model.BPref[j].weight.data[n] += (RFLOAT) weights[n];
-				}
-
-				stream->syclFree(reals);
-				stream->syclFree(imags);
-				stream->syclFree(weights);
-
-				b->backprojectors[j].clear();
-			}
-
-			for (int j = 0; j < b->projectors.size(); j++)
-				b->projectors[j].clear();
-
-			for (int j = 0; j < b->coarseProjectionPlans.size(); j++)
-				b->coarseProjectionPlans[j].clear();
-		}
-
-		for (int i = 0; i < gpuOptimisers.size(); i++)
-			delete (MlOptimiserSYCL*)gpuOptimisers[i];
-
-		gpuOptimisers.clear();
-
-		for (int i = 0; i < accDataBundles.size(); i++)
-			delete (MlSyclDataBundle*)accDataBundles[i];
-
-		accDataBundles.clear();
-	}
-#endif
-#ifdef ALTCPU
-    if (do_cpu)
-    {
-        MlDataBundle* b = (MlDataBundle*) accDataBundles[0];
-
-        for (int j = 0; j < b->backprojectors.size(); j++)
-        {
-            unsigned long s = wsum_model.BPref[j].data.nzyxdim;
-            XFLOAT *reals = NULL;
-            XFLOAT *imags = NULL;
-            XFLOAT *weights = NULL;
-
-            b->backprojectors[j].getMdlDataPtrs(reals, imags, weights);
-
-            for (unsigned long n = 0; n < s; n++)
-            {
-                wsum_model.BPref[j].data.data[n].real += (RFLOAT) reals[n];
-                wsum_model.BPref[j].data.data[n].imag += (RFLOAT) imags[n];
-                wsum_model.BPref[j].weight.data[n] += (RFLOAT) weights[n];
-            }
-
-            b->backprojectors[j].clear();
-        }
-
-        for (int j = 0; j < b->projectors.size(); j++)
-            b->projectors[j].clear();
-
-        for (int j = 0; j < b->coarseProjectionPlans.size(); j++)
-            b->coarseProjectionPlans[j].clear();
-
-        delete b;
-        accDataBundles.clear();
-
-        // Now clean up
-        unsigned nr_classes = mymodel.nr_classes;
-        for (int iclass = 0; iclass < nr_classes; iclass++)
-        {
-            delete [] mdlClassComplex[iclass];
-        }
-        free(mdlClassComplex);
-
-        tbbCpuOptimiser.clear();
-    }
-#endif  // ALTCPU
+    // Accelerator teardown
+    if (accBackend) { accBackend->teardown(*this); delete accBackend; accBackend = nullptr; }
 #ifdef  MKLFFT
     // Allow parallel FFTW execution to continue now that we are outside the parallel
     // portion of expectation
@@ -4271,45 +3968,7 @@ void MlOptimiser::expectationSomeParticles(long int my_first_part_id, long int m
 #ifdef DEBUG_EXPSOME
     std::cerr << " exp_my_first_part_id= " << exp_my_first_part_id << " exp_my_last_part_id= " << exp_my_last_part_id << std::endl;
 #endif
-    if (!do_cpu)
-    {
-        // GPU and traditional CPU case - use RELION's built-in task manager to
-        // process multiple particles at once
-        exp_ipart_ThreadTaskDistributor->resize(my_last_part_id - my_first_part_id + 1, 1);
-        exp_ipart_ThreadTaskDistributor->reset();
-        #pragma omp parallel for num_threads(nr_threads)
-        for (int thread_id = 0; thread_id < nr_threads; thread_id++)
-            globalThreadExpectationSomeParticles(this, thread_id);
-    }
-#ifdef ALTCPU
-    else
-    {
-        // "New" CPU case - use TBB's tasking system to process multiple
-        // particles in parallel.  Like the GPU implementation, the lower-
-        // level parallelism is implemented by compiler vectorization
-        // (roughly equivalent to GPU "threads").
-        std::atomic<int> tCount(0);
-
-        // Set the size of the TBB thread pool for these particles
-        tbb::global_control gc(tbb::global_control::max_allowed_parallelism, nr_threads);
-        // process all passed particles in parallel
-        //for(unsigned long i=my_first_part_id; i<=my_last_part_id; i++) {
-        tbb::parallel_for(my_first_part_id, my_last_part_id+1, [&](long int i) {
-            CpuOptimiserType::reference ref = tbbCpuOptimiser.local();
-            MlOptimiserCpu *cpuOptimiser = (MlOptimiserCpu *)ref;
-            if(cpuOptimiser == NULL) {
-                cpuOptimiser = new MlOptimiserCpu(this, (MlDataBundle*)accDataBundles[0], "cpu_optimiser");
-                cpuOptimiser->resetData();
-                ref = cpuOptimiser;
-
-                cpuOptimiser->thread_id = tCount.fetch_add(1);
-            }  // cpuOptimiser == NULL
-
-            cpuOptimiser->expectationOneParticle(i, cpuOptimiser->thread_id);
-        });
-        //}
-    }  // do_cpu
-#endif  // ifdef ALTCPU
+    accBackend->runParticles(*this, my_first_part_id, my_last_part_id);
 
     if (threadException != NULL)
         throw *threadException;

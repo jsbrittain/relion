@@ -226,12 +226,14 @@ int Timer::setNew(const std::string tag)
 
 void Timer::tic(int timer)
 {
+	if (timer < 0 || timer >= (int)start_times.size()) return;
 	gettimeofday(&(start_times[timer]), NULL);
 	counts[timer]++;
 }
 
 void Timer::toc(int timer)
 {
+	if (timer < 0 || timer >= (int)start_times.size()) return;
 	gettimeofday(&end_time, NULL);
 	times[timer] += (end_time.tv_sec - start_times[timer].tv_sec) * 1000000 +
 				   (end_time.tv_usec - start_times[timer].tv_usec);

@@ -9,28 +9,20 @@
 #include "src/acc/acc_backprojector.h"
 #include "src/acc/cuda/cuda_fft.h"
 #include "src/acc/cuda/cuda_benchmark_utils.h"
+#include "src/acc/acc_bundle.h"
+#include "src/acc/acc_optimiser.h"
 #include <stack>
 //#include <cufft.h>
 
 #include "src/acc/acc_ml_optimiser.h"
 #include "src/acc/acc_ptr.h"
 
-class MlDeviceBundle
+class MlDeviceBundle : public AccBundle
 {
 public:
 
-	//The CUDA accelerated projector set
-	std::vector< AccProjector > projectors;
-
-	//The CUDA accelerated back-projector set
-	std::vector< AccBackprojector > backprojectors;
-
 	//Used for precalculations of projection setup
 	CudaCustomAllocator *allocator;
-
-	//Used for precalculations of projection setup
-	bool generateProjectionPlanOnTheFly;
-	std::vector< AccProjectorPlan > coarseProjectionPlans;
 
 	MlOptimiser *baseMLO;
 
@@ -42,12 +34,13 @@ public:
 
 	MlDeviceBundle(MlOptimiser *baseMLOptimiser):
 			baseMLO(baseMLOptimiser),
-			generateProjectionPlanOnTheFly(false),
 			rank_shared_count(1),
 			device_id(-1),
 			haveWarnedRefinementMem(false),
 			allocator(NULL)
-	{};
+	{
+		generateProjectionPlanOnTheFly = false;
+	};
 
 	void setDevice(int did)
 	{
@@ -58,11 +51,36 @@ public:
 	void setupFixedSizedObjects();
 	void setupTunableSizedObjects(size_t allocationSize);
 
-	void syncAllBackprojects()
+	void syncAllBackprojects() override
 	{
 		DEBUG_HANDLE_ERROR(cudaDeviceSynchronize());
 	}
 
+	void extractAndAccumulate(MlWsumModel &wsum) override
+	{
+		for (int j = 0; j < (int)backprojectors.size(); j++)
+		{
+			unsigned long s = wsum.BPref[j].data.nzyxdim;
+			XFLOAT *reals   = new XFLOAT[s];
+			XFLOAT *imags   = new XFLOAT[s];
+			XFLOAT *weights = new XFLOAT[s];
+
+			backprojectors[j].getMdlData(reals, imags, weights);
+
+			for (unsigned long n = 0; n < s; n++)
+			{
+				wsum.BPref[j].data.data[n].real   += (RFLOAT) reals[n];
+				wsum.BPref[j].data.data[n].imag   += (RFLOAT) imags[n];
+				wsum.BPref[j].weight.data[n]       += (RFLOAT) weights[n];
+			}
+
+			delete[] reals;
+			delete[] imags;
+			delete[] weights;
+
+			backprojectors[j].clear();
+		}
+	}
 
 	~MlDeviceBundle()
 	{
@@ -74,7 +92,7 @@ public:
 	}
 
 };
-class MlOptimiserCuda
+class MlOptimiserCuda : public AccOptimiser
 {
 public:
 	// transformer as holder for reuse of fftw_plans
@@ -125,22 +143,22 @@ public:
 			generateProjectionPlanOnTheFly(bundle->generateProjectionPlanOnTheFly)
 	{};
 
-	void resetData();
+	void resetData() override;
 
-	void doThreadExpectationSomeParticles(int thread_id);
+	void doThreadExpectationSomeParticles(int thread_id) override;
 
 	~MlOptimiserCuda()
 	{
-		for (int i = 0; i < classStreams.size(); i++)
+		for (int i = 0; i < (int)classStreams.size(); i++)
 			if (classStreams[i] != NULL)
 				HANDLE_ERROR(cudaStreamDestroy(classStreams[i]));
 	}
 
-	CudaCustomAllocator *getAllocator()	
+	CudaCustomAllocator *getAllocator()
 	{
 		return (bundle->allocator);
 	};
-	
+
 };
 
 #endif

@@ -33,6 +33,11 @@
 #include <sstream>
 #include <vector>
 #include <iterator>
+
+// Forward declarations for accelerator abstraction
+class AccBundle;
+class AccOptimiser;
+class AccBackend;
 #include "src/ml_model.h"
 #include "src/parallel.h"
 #include "src/exp_model.h"
@@ -102,18 +107,20 @@ class MlOptimiser
 {
 public:
 
+	// Destructor (defined in ml_optimiser.cpp where AccBackend is complete)
+	~MlOptimiser();
+
 	// For GPU-maps
 	std::vector<int> gpuDevices;
 	std::vector<int> gpuOptimiserDeviceMap;
-	std::vector<void*> gpuOptimisers;
-	std::vector<void*> accDataBundles;
+	std::vector<AccOptimiser*> accOptimisers;
+	std::vector<AccBundle*>    accDataBundles;
+	AccBackend*                accBackend = nullptr;
 #if _SYCL_ENABLED
 	std::vector<deviceStream_t> syclDeviceList;
 #endif
 
 #ifdef ALTCPU
-	std::vector<void*> cpuOptimisers;
-
 	// Container for TBB thread-local data
 	typedef tbb::enumerable_thread_specific< void * > CpuOptimiserType;
 
@@ -121,6 +128,19 @@ public:
 
 	std::complex<XFLOAT> **mdlClassComplex __attribute__((aligned(64)));
 #endif
+
+	// Virtual hook so GPU back-ends can get the per-rank device-share count
+	// (overridden in MlOptimiserMpi)
+	virtual int gpuDeviceShareAt(int /*i*/) const { return 1; }
+
+	// Virtual hook for generating per-thread accelerator timing names
+	// (overridden in MlOptimiserMpi to include the MPI rank)
+	virtual std::string accThreadName(int thread_id) const
+	{
+		std::ostringstream ss;
+		ss << "RRt" << thread_id;
+		return ss.str();
+	}
 
 
 	// I/O Parser
@@ -923,14 +943,28 @@ public:
             do_trust_ref_size(0),
             minimum_nr_particles_sigma2_noise(1000)
 	{
+#ifdef TIMING
+		// Initialise all timing IDs to -1 so that Timer::tic/toc no-op on
+		// any ID that has not yet been registered via timer.setNew().
+		TIMING_DIFF_PROJ = TIMING_DIFF_SHIFT = TIMING_DIFF_DIFF2 = -1;
+		TIMING_WSUM_PROJ = TIMING_WSUM_BACKPROJ = TIMING_WSUM_DIFF2 = TIMING_WSUM_SUMSHIFT = -1;
+		TIMING_EXP = TIMING_MAX = TIMING_RECONS = TIMING_SOLVFLAT = TIMING_UPDATERES = -1;
+		TIMING_EXP_1 = TIMING_EXP_1a = TIMING_EXP_2 = TIMING_EXP_3 = TIMING_EXP_4 = -1;
+		TIMING_EXP_4a = TIMING_EXP_4b = TIMING_EXP_4c = TIMING_EXP_4d = -1;
+		TIMING_EXP_5 = TIMING_EXP_6 = TIMING_EXP_7 = TIMING_EXP_8 = TIMING_EXP_9 = -1;
+		TIMING_ESP = TIMING_ESP_THR = TIMING_ESP_ONEPART = TIMING_ESP_ONEPARTN = -1;
+		TIMING_EXP_METADATA = TIMING_EXP_CHANGES = -1;
+		TIMING_ESP_FT = TIMING_ESP_INI = TIMING_ESP_DIFF1 = TIMING_ESP_DIFF2 = -1;
+		TIMING_ESP_DIFF2_A = TIMING_ESP_DIFF2_B = TIMING_ESP_DIFF2_C = TIMING_ESP_DIFF2_D = TIMING_ESP_DIFF2_E = -1;
+		TIMING_ESP_PREC1 = TIMING_ESP_PREC2 = TIMING_ESP_PRECW = -1;
+		TIMING_WSUM_GETSHIFT = TIMING_DIFF2_GETSHIFT = TIMING_WSUM_SCALE = TIMING_WSUM_LOCALSUMS = -1;
+		TIMING_ESP_WEIGHT1 = TIMING_ESP_WEIGHT2 = TIMING_WEIGHT_EXP = TIMING_WEIGHT_SORT = TIMING_ESP_WSUM = -1;
+		TIMING_EXTRA1 = TIMING_EXTRA2 = TIMING_EXTRA3 = -1;
+#endif
 #ifdef ALTCPU
 		tbbCpuOptimiser = CpuOptimiserType((void*)NULL);
 #endif
 	};
-
-#ifdef _SYCL_ENABLED
-	~MlOptimiser();
-#endif
 
 	/** ========================== I/O operations  =========================== */
 	/// Print help message

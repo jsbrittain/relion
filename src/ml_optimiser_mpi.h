@@ -48,7 +48,16 @@ public:
   int ori_verb;
 
   /** Destructor, calls MPI_Finalize */
-  ~MlOptimiserMpi() { delete node; }
+  ~MlOptimiserMpi();
+
+  int gpuDeviceShareAt(int i) const override { return gpuDeviceShares[i]; }
+
+  std::string accThreadName(int thread_id) const override
+  {
+      std::ostringstream ss;
+      ss << "RRr" << node->rank << "t" << thread_id;
+      return ss.str();
+  }
 
   /** Read
    * This could take care of mpi-parallelisation-dependent variables

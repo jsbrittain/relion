@@ -12,28 +12,20 @@
 #include "src/acc/acc_backprojector.h"
 #include "src/acc/hip/hip_fft.h"
 #include "src/acc/hip/hip_benchmark_utils.h"
+#include "src/acc/acc_bundle.h"
+#include "src/acc/acc_optimiser.h"
 #include <stack>
 //#include <hipfft.h>
 
 #include "src/acc/acc_ml_optimiser.h"
 #include "src/acc/acc_ptr.h"
 
-class MlDeviceBundle
+class MlDeviceBundle : public AccBundle
 {
 public:
 
-	//The HIP accelerated projector set
-	std::vector< AccProjector > projectors;
-
-	//The HIP accelerated back-projector set
-	std::vector< AccBackprojector > backprojectors;
-
 	//Used for precalculations of projection setup
 	HipCustomAllocator *allocator;
-
-	//Used for precalculations of projection setup
-	bool generateProjectionPlanOnTheFly;
-	std::vector< AccProjectorPlan > coarseProjectionPlans;
 
 	MlOptimiser *baseMLO;
 
@@ -45,12 +37,13 @@ public:
 
 	MlDeviceBundle(MlOptimiser *baseMLOptimiser):
 			baseMLO(baseMLOptimiser),
-			generateProjectionPlanOnTheFly(false),
 			rank_shared_count(1),
 			device_id(-1),
 			haveWarnedRefinementMem(false),
 			allocator(NULL)
-	{};
+	{
+		generateProjectionPlanOnTheFly = false;
+	};
 
 	void setDevice(int did)
 	{
@@ -61,11 +54,36 @@ public:
 	void setupFixedSizedObjects();
 	void setupTunableSizedObjects(size_t allocationSize);
 
-	void syncAllBackprojects()
+	void syncAllBackprojects() override
 	{
 		DEBUG_HANDLE_ERROR(hipDeviceSynchronize());
 	}
 
+	void extractAndAccumulate(MlWsumModel &wsum) override
+	{
+		for (int j = 0; j < (int)backprojectors.size(); j++)
+		{
+			unsigned long s = wsum.BPref[j].data.nzyxdim;
+			XFLOAT *reals   = new XFLOAT[s];
+			XFLOAT *imags   = new XFLOAT[s];
+			XFLOAT *weights = new XFLOAT[s];
+
+			backprojectors[j].getMdlData(reals, imags, weights);
+
+			for (unsigned long n = 0; n < s; n++)
+			{
+				wsum.BPref[j].data.data[n].real   += (RFLOAT) reals[n];
+				wsum.BPref[j].data.data[n].imag   += (RFLOAT) imags[n];
+				wsum.BPref[j].weight.data[n]       += (RFLOAT) weights[n];
+			}
+
+			delete[] reals;
+			delete[] imags;
+			delete[] weights;
+
+			backprojectors[j].clear();
+		}
+	}
 
 	~MlDeviceBundle()
 	{
@@ -77,7 +95,7 @@ public:
 	}
 
 };
-class MlOptimiserHip
+class MlOptimiserHip : public AccOptimiser
 {
 public:
 	// transformer as holder for reuse of fftw_plans
@@ -119,7 +137,7 @@ public:
 			refIs3D(baseMLO->mymodel.ref_dim == 3),
 			dataIs3D(baseMLO->mymodel.data_dim == 3),
 			shiftsIs3D(baseMLO->mymodel.data_dim == 3 || baseMLO->mydata.is_tomo),
-            bundle(bundle),
+                        bundle(bundle),
 			device_id(bundle->device_id),
 #ifdef TIMING_FILES
 			timer(timing_fnm),
@@ -129,13 +147,13 @@ public:
 			generateProjectionPlanOnTheFly(bundle->generateProjectionPlanOnTheFly)
 	{};
 
-	void resetData();
+	void resetData() override;
 
-	void doThreadExpectationSomeParticles(int thread_id);
+	void doThreadExpectationSomeParticles(int thread_id) override;
 
 	~MlOptimiserHip()
 	{
-		for (int i = 0; i < classStreams.size(); i++)
+		for (int i = 0; i < (int)classStreams.size(); i++)
 			if (classStreams[i] != NULL)
 				HANDLE_ERROR(hipStreamDestroy(classStreams[i]));
 	}

@@ -18,28 +18,47 @@
 #include "src/acc/acc_backprojector.h"
 #include "src/acc/sycl/mkl_fft.h"
 #include "src/acc/sycl/sycl_benchmark_utils.h"
+#include "src/acc/acc_bundle.h"
+#include "src/acc/acc_optimiser.h"
 
 #include "src/acc/acc_ml_optimiser.h"
 #include "src/acc/acc_ptr.h"
 
 #include "src/acc/sycl/sycl_virtual_dev.h"
 
-class MlSyclDataBundle
+class MlSyclDataBundle : public AccBundle
 {
 public:
-	//The SYCL accelerated projector set
-	std::vector< AccProjector > projectors;
-
-	//The SYCL accelerated back-projector set
-	std::vector< AccBackprojector > backprojectors;
-
-	//Used for precalculations of projection setup
-	bool generateProjectionPlanOnTheFly;
-	std::vector< AccProjectorPlan > coarseProjectionPlans;
-
 	void setup(MlOptimiser *baseMLO);
-	void syncAllBackprojects()	{ _devAcc->waitAll(); }
+	void syncAllBackprojects() override	{ _devAcc->waitAll(); }
 	virtualSYCL* getSyclDevice()	{ return _devAcc; }
+
+	void extractAndAccumulate(MlWsumModel &wsum) override
+	{
+		for (int j = 0; j < (int)backprojectors.size(); j++)
+		{
+			unsigned long s = wsum.BPref[j].data.nzyxdim;
+			deviceStream_t stream = backprojectors[j].stream;
+			XFLOAT *reals   = (XFLOAT*)(stream->syclMalloc(s * sizeof(XFLOAT), syclMallocType::host));
+			XFLOAT *imags   = (XFLOAT*)(stream->syclMalloc(s * sizeof(XFLOAT), syclMallocType::host));
+			XFLOAT *weights = (XFLOAT*)(stream->syclMalloc(s * sizeof(XFLOAT), syclMallocType::host));
+
+			backprojectors[j].getMdlData(reals, imags, weights);
+
+			for (unsigned long n = 0; n < s; n++)
+			{
+				wsum.BPref[j].data.data[n].real   += (RFLOAT) reals[n];
+				wsum.BPref[j].data.data[n].imag   += (RFLOAT) imags[n];
+				wsum.BPref[j].weight.data[n]       += (RFLOAT) weights[n];
+			}
+
+			stream->syclFree(reals);
+			stream->syclFree(imags);
+			stream->syclFree(weights);
+
+			backprojectors[j].clear();
+		}
+	}
 
 	MlSyclDataBundle(virtualSYCL *dev);
 	~MlSyclDataBundle();
@@ -48,7 +67,7 @@ private:
 	virtualSYCL *_devAcc;
 };
 
-class MlOptimiserSYCL
+class MlOptimiserSYCL : public AccOptimiser
 {
 public:
 	MlOptimiser *baseMLO;
@@ -79,10 +98,10 @@ public:
 
 	void setupDevice();
 
-	void resetData();
+	void resetData() override;
 
 	void expectationOneParticle(unsigned long my_part_id, const int thread_id);
-	void doThreadExpectationSomeParticles(const int thread_id);
+	void doThreadExpectationSomeParticles(const int thread_id) override;
 
 	void* getAllocator()
 	{
