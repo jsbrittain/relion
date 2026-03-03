@@ -12,6 +12,15 @@
  *   2. runLeaderExpectationLoop() / – with zero particles the leader immediately
  *      runFollowerExpectationLoop()   signals "done" to every follower; both sides
  *                                     complete without deadlock.
+ *   3. setupAccelerators()          – accOptimisers also stays empty for the plain
+ *                                     CPU backend.
+ *   4. setupAccelerators()          – leader keeps accBackend == nullptr; each
+ *                                     follower gets a non-null backend.
+ *   5. makeAccBackend factory       – returns a non-null PlainCpuBackend when all
+ *                                     backend flags are false.
+ *   6. PlainCpuBackend methods      – createBundles, createOptimisers, and teardown
+ *                                     are all no-ops: they leave accDataBundles and
+ *                                     accOptimisers empty.
  *
  * MPI lifecycle:
  *   MpiNode::MpiNode() calls MPI_Init internally, so we construct one shared node
@@ -23,6 +32,7 @@
 
 #include <gtest/gtest.h>
 #include "src/ml_optimiser_mpi.h"
+#include "src/acc/acc_backend_factory.h"
 
 // ---------------------------------------------------------------------------
 // Global MPI state – initialised once in main() via MpiNode.
@@ -102,6 +112,81 @@ TEST_F(ExpectationRefactorMpiTest, ZeroParticleDispatch)
     MPI_Barrier(MPI_COMM_WORLD);
 
     SUCCEED();  // reaching here without deadlock is the meaningful assertion
+}
+
+// ---------------------------------------------------------------------------
+// Test 3: setupAccelerators() leaves accOptimisers empty when no backend
+//         is active (do_gpu / do_sycl / do_cpu are all false).
+// ---------------------------------------------------------------------------
+TEST_F(ExpectationRefactorMpiTest, SetupAcceleratorsAccOptimisersEmpty)
+{
+    ASSERT_TRUE(opt.accOptimisers.empty())
+        << "Precondition: accOptimisers must be empty before the call";
+
+    opt.setupAccelerators();
+
+    EXPECT_TRUE(opt.accOptimisers.empty())
+        << "setupAccelerators() must not populate accOptimisers "
+           "when do_gpu=do_sycl=do_cpu=false";
+}
+
+// ---------------------------------------------------------------------------
+// Test 4: Backend ownership after setupAccelerators():
+//   - Leader (rank 0) must not create a backend; accBackend stays null.
+//   - Each follower (rank > 0) must own one; accBackend is non-null.
+// ---------------------------------------------------------------------------
+TEST_F(ExpectationRefactorMpiTest, SetupAcceleratorsBackendOwnership)
+{
+    if (g_node->size < 2)
+        GTEST_SKIP() << "SetupAcceleratorsBackendOwnership requires at least 2 MPI ranks";
+
+    opt.setupAccelerators();
+
+    if (g_node->isLeader())
+        EXPECT_EQ(opt.accBackend, nullptr)
+            << "Leader must not create a backend (setupAccelerators skips it)";
+    else
+        EXPECT_NE(opt.accBackend, nullptr)
+            << "Follower must own a backend after setupAccelerators()";
+
+    MPI_Barrier(MPI_COMM_WORLD);
+}
+
+// ---------------------------------------------------------------------------
+// Test 5: makeAccBackend(false, false, false) returns a non-null PlainCpuBackend.
+//         This exercises the factory fallback path; no MPI needed.
+// ---------------------------------------------------------------------------
+TEST(AccBackendFactoryTest, PlainCpuFallbackIsNonNull)
+{
+    std::unique_ptr<AccBackend> backend =
+        makeAccBackend(/*do_gpu=*/false, /*do_sycl=*/false, /*do_cpu=*/false);
+
+    EXPECT_NE(backend.get(), nullptr)
+        << "makeAccBackend must return a non-null PlainCpuBackend "
+           "when all flags are false";
+}
+
+// ---------------------------------------------------------------------------
+// Test 6: PlainCpuBackend::createBundles, createOptimisers, and teardown are
+//         all no-ops: accDataBundles and accOptimisers must stay empty.
+// ---------------------------------------------------------------------------
+TEST_F(ExpectationRefactorMpiTest, PlainCpuBackendMethodsAreNoOps)
+{
+    PlainCpuBackend backend;
+
+    backend.createBundles(opt);
+    EXPECT_TRUE(opt.accDataBundles.empty())
+        << "PlainCpuBackend::createBundles must not push any bundles";
+
+    backend.createOptimisers(opt);
+    EXPECT_TRUE(opt.accOptimisers.empty())
+        << "PlainCpuBackend::createOptimisers must not push any optimisers";
+
+    backend.teardown(opt);
+    EXPECT_TRUE(opt.accDataBundles.empty())
+        << "PlainCpuBackend::teardown must leave accDataBundles empty";
+    EXPECT_TRUE(opt.accOptimisers.empty())
+        << "PlainCpuBackend::teardown must leave accOptimisers empty";
 }
 
 // ---------------------------------------------------------------------------

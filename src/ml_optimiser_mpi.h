@@ -167,6 +167,9 @@ private:
   // FRIEND_TEST expands to: friend class SuiteName_CaseName_Test
   FRIEND_TEST(ExpectationRefactorMpiTest, SetupAcceleratorsNoOp);
   FRIEND_TEST(ExpectationRefactorMpiTest, ZeroParticleDispatch);
+  FRIEND_TEST(ExpectationRefactorMpiTest, SetupAcceleratorsAccOptimisersEmpty);
+  FRIEND_TEST(ExpectationRefactorMpiTest, SetupAcceleratorsBackendOwnership);
+  FRIEND_TEST(ExpectationRefactorMpiTest, PlainCpuBackendMethodsAreNoOps);
 #endif
 
 #ifdef _SYCL_ENABLED
