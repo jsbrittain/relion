@@ -41,13 +41,13 @@
 //#define DEBUG_MPIEXP2
 
 #ifdef TIMING
-        int TIMING_MPIPACK, TIMING_MPIWAIT, TIMING_MPICOMBINEDISC, TIMING_MPICOMBINENETW, TIMING_MPISLAVEWORK;
-        int TIMING_MPISLAVEWAIT1, TIMING_MPISLAVEWAIT2, TIMING_MPISLAVEWAIT3;
-		#define RCTIC(timer,label) (timer.tic(label))
-		#define RCTOC(timer,label) (timer.toc(label))
+    int TIMING_MPIPACK, TIMING_MPIWAIT, TIMING_MPICOMBINEDISC, TIMING_MPICOMBINENETW, TIMING_MPISLAVEWORK;
+    int TIMING_MPISLAVEWAIT1, TIMING_MPISLAVEWAIT2, TIMING_MPISLAVEWAIT3;
+    #define TIMER_TIC(label) (timer.tic(label))
+    #define TIMER_TOC(label) (timer.toc(label))
 #else
-		#define RCTIC(timer,label)
-    	#define RCTOC(timer,label)
+    #define TIMER_TIC(label)
+    #define TIMER_TOC(label)
 #endif
 
 void MlOptimiserMpi::read(int argc, char **argv)
@@ -998,16 +998,14 @@ void MlOptimiserMpi::setupAccelerators()
 	{
 		for (int i = 0; i < gpuDevices.size(); i ++)
 		{
-#ifdef TIMING
-		timer.tic(TIMING_EXP_4b);
-#endif
-			MlDeviceBundle *b = new MlDeviceBundle(this);
-			b->setDevice(gpuDevices[i]);
-			b->setupFixedSizedObjects();
-			accDataBundles.push_back((void*)b);
-#ifdef TIMING
-		timer.toc(TIMING_EXP_4b);
-#endif
+      TIMER_TIC(TIMING_EXP_4b);
+
+      MlDeviceBundle *b = new MlDeviceBundle(this);
+      b->setDevice(gpuDevices[i]);
+      b->setupFixedSizedObjects();
+      accDataBundles.push_back((void*)b);
+      
+      TIMER_TOC(TIMING_EXP_4b);
 		}
 
 		std::vector<unsigned> threadcountOnDevice(accDataBundles.size(),0);
@@ -1162,9 +1160,8 @@ void MlOptimiserMpi::setupAccelerators()
 
 void MlOptimiserMpi::runLeaderExpectationLoop(MultidimArray<long int>& job_buf, long int my_nr_particles)
 {
-#ifdef TIMING
-	timer.tic(TIMING_EXP_5);
-#endif
+	TIMER_TIC(TIMING_EXP_5);
+
 	long int& job_first      = job_buf(0);
 	long int& job_last       = job_buf(1);
 	long int& job_nimg       = job_buf(2);
@@ -1374,16 +1371,13 @@ void MlOptimiserMpi::runLeaderExpectationLoop(MultidimArray<long int>& job_buf, 
 		std::cerr << "leader encountered error: " << XE;
 		MPI_Abort(MPI_COMM_WORLD, RELION_EXIT_FAILURE);
 	}
-#ifdef TIMING
-	timer.toc(TIMING_EXP_5);
-#endif
+	TIMER_TOC(TIMING_EXP_5);
 }
 
 void MlOptimiserMpi::runFollowerExpectationLoop(MultidimArray<long int>& job_buf)
 {
-#ifdef TIMING
-	timer.tic(TIMING_EXP_6);
-#endif
+	TIMER_TIC(TIMING_EXP_6);
+
 	long int& job_first      = job_buf(0);
 	long int& job_last       = job_buf(1);
 	long int& job_nimg       = job_buf(2);
@@ -1414,14 +1408,10 @@ void MlOptimiserMpi::runFollowerExpectationLoop(MultidimArray<long int>& job_buf
 		MPI_Status status;
 		while (true)
 		{
-#ifdef TIMING
-			timer.tic(TIMING_MPISLAVEWAIT1);
-#endif
 			//Receive a new bunch of particles
+			TIMER_TIC(TIMING_MPISLAVEWAIT1);
 			node->relion_MPI_Recv(MULTIDIM_ARRAY(job_buf), MULTIDIM_SIZE(job_buf), MPI_LONG, 0, MPITAG_JOB_REPLY, MPI_COMM_WORLD, status);
-#ifdef TIMING
-			timer.toc(TIMING_MPISLAVEWAIT1);
-#endif
+			TIMER_TOC(TIMING_MPISLAVEWAIT1);
 
 			//Check whether I am done
 			if (job_nimg <= 0)
@@ -1435,10 +1425,8 @@ void MlOptimiserMpi::runFollowerExpectationLoop(MultidimArray<long int>& job_buf
 			}
 			else
 			{
-#ifdef TIMING
-				timer.tic(TIMING_MPISLAVEWAIT2);
-#endif
 				// Also receive the imagedata and the metadata for these images from the leader
+				TIMER_TIC(TIMING_MPISLAVEWAIT2);
 				exp_metadata.resize(job_nimg, METADATA_LINE_LENGTH_BEFORE_BODIES + (mymodel.nr_bodies) * METADATA_NR_BODY_PARAMS);
 				node->relion_MPI_Recv(MULTIDIM_ARRAY(exp_metadata), MULTIDIM_SIZE(exp_metadata), MY_MPI_DOUBLE, 0, MPITAG_METADATA, MPI_COMM_WORLD, status);
 
@@ -1504,24 +1492,18 @@ void MlOptimiserMpi::runFollowerExpectationLoop(MultidimArray<long int>& job_buf
 #ifdef DEBUG_MPIEXP
 				std::cerr << " SLAVE EXECUTING node->rank= " << node->rank << " JOB_FIRST= " << job_first << " JOB_LAST= " << job_last << std::endl;
 #endif
-#ifdef TIMING
-				timer.toc(TIMING_MPISLAVEWAIT2);
-				timer.tic(TIMING_MPISLAVEWORK);
-#endif
+				TIMER_TOC(TIMING_MPISLAVEWAIT2);
+				TIMER_TIC(TIMING_MPISLAVEWORK);
 				expectationSomeParticles(job_first, job_last);
-#ifdef TIMING
-				timer.toc(TIMING_MPISLAVEWORK);
-				timer.tic(TIMING_MPISLAVEWAIT3);
-#endif
+				TIMER_TOC(TIMING_MPISLAVEWORK);
+				TIMER_TIC(TIMING_MPISLAVEWAIT3);
 
 				// Report to the leader how many particles I have processed
 				node->relion_MPI_Send(MULTIDIM_ARRAY(job_buf), MULTIDIM_SIZE(job_buf), MPI_LONG, 0, MPITAG_JOB_REQUEST, MPI_COMM_WORLD);
 				// Also send the metadata belonging to those
 				node->relion_MPI_Send(MULTIDIM_ARRAY(exp_metadata), MULTIDIM_SIZE(exp_metadata), MY_MPI_DOUBLE, 0, MPITAG_METADATA, MPI_COMM_WORLD);
 
-#ifdef TIMING
-				timer.toc(TIMING_MPISLAVEWAIT3);
-#endif
+				TIMER_TOC(TIMING_MPISLAVEWAIT3);
 			}
 		}
 //		TODO: define MPI_COMM_SLAVES!!!!	MPI_Barrier(node->MPI_COMM_SLAVES);
@@ -1531,9 +1513,8 @@ void MlOptimiserMpi::runFollowerExpectationLoop(MultidimArray<long int>& job_buf
 		{
 			for (int i = 0; i < accDataBundles.size(); i ++)
 			{
-#ifdef TIMING
-	timer.tic(TIMING_EXP_7);
-#endif
+        TIMER_TIC(TIMING_EXP_7);
+
 				MlDeviceBundle* b = ((MlDeviceBundle*)accDataBundles[i]);
 				b->syncAllBackprojects();
 
@@ -1565,13 +1546,12 @@ void MlOptimiserMpi::runFollowerExpectationLoop(MultidimArray<long int>& job_buf
 
 				for (int j = 0; j < b->coarseProjectionPlans.size(); j++)
 					b->coarseProjectionPlans[j].clear();
-#ifdef TIMING
-	timer.toc(TIMING_EXP_7);
-#endif
+
+        TIMER_TOC(TIMING_EXP_7);
 			}
-#ifdef TIMING
-	timer.tic(TIMING_EXP_8);
-#endif
+
+      TIMER_TIC(TIMING_EXP_8);
+
 			for (int i = 0; i < gpuOptimisers.size(); i ++)
 				delete (MlOptimiserAccGPU*) gpuOptimisers[i];
 
@@ -1599,9 +1579,7 @@ void MlOptimiserMpi::runFollowerExpectationLoop(MultidimArray<long int>& job_buf
 				delete (MlDeviceBundle*) accDataBundles[i];
 
 			accDataBundles.clear();
-#ifdef TIMING
-	timer.toc(TIMING_EXP_8);
-#endif
+      TIMER_TOC(TIMING_EXP_8);
 		}
 #endif // _CUDA_ENABLED or _HIP_ENABLED
 #ifdef _SYCL_ENABLED
@@ -1709,16 +1687,12 @@ void MlOptimiserMpi::runFollowerExpectationLoop(MultidimArray<long int>& job_buf
 		std::cerr << "follower "<< node->rank << " encountered error: " << XE;
 		MPI_Abort(MPI_COMM_WORLD, RELION_EXIT_FAILURE);
 	}
-#ifdef TIMING
-	timer.toc(TIMING_EXP_6);
-#endif
+	TIMER_TOC(TIMING_EXP_6);
 }
 
 void MlOptimiserMpi::expectation()
 {
-#ifdef TIMING
-	timer.tic(TIMING_EXP_1);
-#endif
+	TIMER_TIC(TIMING_EXP_1);
 #ifdef DEBUG
 	std::cerr << "MlOptimiserMpi::expectation: Entering " << std::endl;
 #endif
@@ -1739,9 +1713,7 @@ void MlOptimiserMpi::expectation()
 
 	// B. Set the PPref Fourier transforms, initialise wsum_model, etc.
 	// The leader only holds metadata, it does not set up the wsum_model (to save memory)
-#ifdef TIMING
-	timer.tic(TIMING_EXP_1a);
-#endif
+	TIMER_TIC(TIMING_EXP_1a);
 	if (!node->isLeader())
 	{
 		MlOptimiser::expectationSetup();
@@ -1754,9 +1726,7 @@ void MlOptimiserMpi::expectation()
 	}
 
 	MPI_Barrier(MPI_COMM_WORLD);
-#ifdef TIMING
-	timer.toc(TIMING_EXP_1a);
-#endif
+	TIMER_TOC(TIMING_EXP_1a);
 
 	if(!do_split_random_halves)
 	{
@@ -1802,10 +1772,9 @@ void MlOptimiserMpi::expectation()
 	}
 #endif
 
-#ifdef TIMING
-	timer.toc(TIMING_EXP_1);
-	timer.tic(TIMING_EXP_2);
-#endif
+	TIMER_TOC(TIMING_EXP_1);
+	TIMER_TIC(TIMING_EXP_2);
+
 	// C. Calculate expected angular errors
 	// Skip for maxCC
 	// Skip if not doing alignment
@@ -1814,10 +1783,9 @@ void MlOptimiserMpi::expectation()
        (do_auto_refine || !do_grad || iter % 10 == 0 || iter == nr_iter || iter <= 1))
 		calculateExpectedAngularErrors(0, n_trials_acc - 1);
 
-#ifdef TIMING
-		timer.toc(TIMING_EXP_2);
-		timer.tic(TIMING_EXP_3);
-#endif
+  TIMER_TOC(TIMING_EXP_2);
+  TIMER_TIC(TIMING_EXP_3);
+
 	// D. Update the angular sampling (all nodes except leader)
 	if (!do_grad && !node->isLeader() && ( (do_auto_refine || do_auto_sampling) && iter > 1 || (mymodel.nr_classes > 1 && allow_coarser_samplings) ))
 		updateAngularSampling(node->rank == 1);
@@ -1872,17 +1840,15 @@ void MlOptimiserMpi::expectation()
 	// Follower 1 sends has_converged to everyone else (in particular the leader needs it!)
 	node->relion_MPI_Bcast(&has_converged, 1, MPI_INT, first_follower, MPI_COMM_WORLD);
 	node->relion_MPI_Bcast(&do_join_random_halves, 1, MPI_INT, first_follower, MPI_COMM_WORLD);
-#ifdef TIMING
-	timer.toc(TIMING_EXP_3);
-	timer.tic(TIMING_EXP_4);
-	timer.tic(TIMING_EXP_4a);
-#endif
+
+	TIMER_TOC(TIMING_EXP_3);
+	TIMER_TIC(TIMING_EXP_4);
+	TIMER_TIC(TIMING_EXP_4a);
 
 	// Wait until expected angular errors have been calculated
 	MPI_Barrier(MPI_COMM_WORLD);
-#ifdef TIMING
-	timer.toc(TIMING_EXP_4a);
-#endif
+	TIMER_TOC(TIMING_EXP_4a);
+
 	// F. Accelerator setup (CUDA/HIP/SYCL/CPU)
 	setupAccelerators();
 
@@ -1891,9 +1857,7 @@ void MlOptimiserMpi::expectation()
 	fftw_plan_with_nthreads(1);
 #endif
 
-#ifdef TIMING
-	timer.toc(TIMING_EXP_4);
-#endif
+	TIMER_TOC(TIMING_EXP_4);
 	long int my_nr_particles = (subset_size > 0) ? subset_size : mydata.numberOfParticles();
 	MultidimArray<long int> job_buf(6);
 	if (node->isLeader())
@@ -1918,9 +1882,9 @@ void MlOptimiserMpi::expectation()
 
 #ifdef TIMING
 	// Measure how long I have to wait for the rest
-	timer.tic(TIMING_MPIWAIT);
+	TIMER_TIC(TIMING_MPIWAIT);
 	node->barrierWait();
-	timer.toc(TIMING_MPIWAIT);
+	TIMER_TOC(TIMING_MPIWAIT);
 #endif
 
 	// Wait until expected angular errors have been calculated
@@ -1942,9 +1906,8 @@ void MlOptimiserMpi::expectation()
 void MlOptimiserMpi::combineAllWeightedSumsViaFile()
 {
 
-#ifdef TIMING
-	timer.tic(TIMING_MPICOMBINEDISC);
-#endif
+	TIMER_TIC(TIMING_MPICOMBINEDISC);
+
 	MultidimArray<RFLOAT> Mpack;
 	FileName fn_pack;
 
@@ -2037,17 +2000,13 @@ void MlOptimiserMpi::combineAllWeightedSumsViaFile()
 			wsum_model.unpack(Mpack);
 
 	} // end if ((node->size - 1)/nr_halfsets > 1)
-#ifdef TIMING
-	timer.toc(TIMING_MPICOMBINEDISC);
-#endif
 
+	TIMER_TOC(TIMING_MPICOMBINEDISC);
 }
 
 void MlOptimiserMpi::combineAllWeightedSums()
 {
-#ifdef TIMING
-	timer.tic(TIMING_MPICOMBINENETW);
-#endif
+	TIMER_TIC(TIMING_MPICOMBINENETW);
 
 	// Pack all weighted sums in Mpack
 	MultidimArray<RFLOAT> Mpack, Msum;
@@ -2202,9 +2161,7 @@ void MlOptimiserMpi::combineAllWeightedSums()
 #endif
 	}
 
-#ifdef TIMING
-	timer.toc(TIMING_MPICOMBINENETW);
-#endif
+	TIMER_TOC(TIMING_MPICOMBINENETW);
 }
 
 void MlOptimiserMpi::combineWeightedSumsTwoRandomHalvesViaFile()
@@ -2368,9 +2325,7 @@ void MlOptimiserMpi::maximization()
 	std::cerr << "MlOptimiserMpi::maximization: Entering " << std::endl;
 #endif
 
-#ifdef TIMING
-	timer.tic(TIMING_RECONS);
-#endif
+	TIMER_TIC(TIMING_RECONS);
 
 	// For multi-body refinement: check if all bodies are fixed. If so, just return
 	if (mymodel.nr_bodies > 1)
@@ -2422,7 +2377,7 @@ void MlOptimiserMpi::maximization()
 
 		for (int iclass = 0; iclass < mymodel.nr_classes; iclass++)
 		{
-			RCTIC(timer,RCT_1);
+			TIMER_TIC(RCT_1);
 			// either ibody or iclass can be larger than 0, never 2 at the same time!
 			int ith_recons = (mymodel.nr_bodies > 1) ? ibody : iclass;
 
@@ -2713,7 +2668,7 @@ void MlOptimiserMpi::maximization()
 				if (!do_grad)
 					mymodel.Iref[ith_recons].initZeros();
 			}
-			RCTOC(timer,RCT_1);
+			TIMER_TOC(RCT_1);
 //#define DEBUG_RECONSTRUCT
 #ifdef DEBUG_RECONSTRUCT
 			MPI_Barrier( MPI_COMM_WORLD);
@@ -2729,7 +2684,7 @@ void MlOptimiserMpi::maximization()
 #ifdef DEBUG
 	std::cerr << "All classes have been reconstructed" << std::endl;
 #endif
-	RCTIC(timer,RCT_2);
+	TIMER_TIC(RCT_2);
 	// Once reconstructed, broadcast new models to all other nodes
 	// This cannot be done in the reconstruction loop itself because then it will be executed sequentially
 	for (int ibody = 0; ibody < mymodel.nr_bodies; ibody++)
@@ -2890,25 +2845,23 @@ void MlOptimiserMpi::maximization()
 			}
 		}
 	}
-	RCTOC(timer,RCT_2);
-#ifdef TIMING
-		timer.toc(TIMING_RECONS);
-#endif
+	TIMER_TOC(RCT_2);
+  TIMER_TOC(TIMING_RECONS);
 
 	if (node->isLeader())
 	{
-		RCTIC(timer,RCT_4);
+		TIMER_TIC(RCT_4);
 		// The leader also updates the changes in hidden variables
 		updateOverallChangesInHiddenVariables();
-		RCTOC(timer,RCT_4);
+		TIMER_TOC(RCT_4);
 	}
 	else
 	{
 		// Now do the maximisation of all other parameters (and calculate the tau2_class-spectra of the reconstructions
 		// The lazy leader never does this: it only handles metadata and does not have the weighted sums
-		RCTIC(timer,RCT_3);
+		TIMER_TIC(RCT_3);
 		maximizationOtherParameters();
-		RCTOC(timer,RCT_3);
+		TIMER_TOC(RCT_3);
 	}
 
 	// The leader broadcasts the changes in hidden variables to all other nodes
@@ -3885,9 +3838,7 @@ void MlOptimiserMpi::iterate()
 
 	for (iter = iter + 1; iter <= nr_iter; iter++)
     {
-#ifdef TIMING
-		timer.tic(TIMING_EXP);
-#endif
+		TIMER_TIC(TIMING_EXP);
 
 		// Nobody can start the next iteration until everyone has finished
 		MPI_Barrier(MPI_COMM_WORLD);
@@ -4101,10 +4052,8 @@ void MlOptimiserMpi::iterate()
 			}
 		}
 
-#ifdef TIMING
-		timer.toc(TIMING_EXP);
-		timer.tic(TIMING_MAX);
-#endif
+		TIMER_TOC(TIMING_EXP);
+		TIMER_TIC(TIMING_MAX);
 
 		maximization();
 
@@ -4130,15 +4079,11 @@ void MlOptimiserMpi::iterate()
 			}
 		}
 
-#ifdef TIMING
-		timer.toc(TIMING_MAX);
-#endif
+		TIMER_TOC(TIMING_MAX);
 
 		MPI_Barrier(MPI_COMM_WORLD);
 
-#ifdef TIMING
-		timer.tic(TIMING_ITER_HELICALREFINE);
-#endif
+		TIMER_TIC(TIMING_ITER_HELICALREFINE);
 		if (node->isLeader())
 		{
 			if ( (do_helical_refine) && (!do_skip_align) && (!do_skip_rotate) && mymodel.ref_dim == 3)
@@ -4171,22 +4116,19 @@ void MlOptimiserMpi::iterate()
 
 		// Mask the reconstructions to get rid of noisy solvent areas
 		// Skip masking upon convergence (for validation purposes)
-#ifdef TIMING
-        timer.toc(TIMING_ITER_HELICALREFINE);
-        timer.tic(TIMING_SOLVFLAT);
-#endif
-        if (do_solvent && !has_converged)
-        	solventFlatten();
-#ifdef TIMING
-        timer.toc(TIMING_SOLVFLAT);
-        timer.tic(TIMING_UPDATERES);
-#endif
-        // Re-calculate the current resolution, do this before writing to get the correct values in the output files
-        updateCurrentResolution();
-#ifdef TIMING
-        timer.toc(TIMING_UPDATERES);
-        timer.tic(TIMING_ITER_WRITE);
-#endif
+    TIMER_TOC(TIMING_ITER_HELICALREFINE);
+
+    TIMER_TIC(TIMING_SOLVFLAT);
+    if (do_solvent && !has_converged)
+      solventFlatten();
+    TIMER_TOC(TIMING_SOLVFLAT);
+    
+    TIMER_TIC(TIMING_UPDATERES);
+    // Re-calculate the current resolution, do this before writing to get the correct values in the output files
+    updateCurrentResolution();
+    TIMER_TOC(TIMING_UPDATERES);
+    
+    TIMER_TIC(TIMING_ITER_WRITE);
 
 		// If we are joining random halves, then do not write an optimiser file so that it cannot be restarted!
                 // SHWS 11052020: from release-3.2 optimiser.star is an output node, so always write it out....
@@ -4209,9 +4151,7 @@ void MlOptimiserMpi::iterate()
 			MlOptimiser::write(DONT_WRITE_SAMPLING, DO_WRITE_DATA, DONT_WRITE_OPTIMISER, DONT_WRITE_MODEL, node->rank);
 		}
 
-#ifdef TIMING
-		timer.toc(TIMING_ITER_WRITE);
-#endif
+		TIMER_TOC(TIMING_ITER_WRITE);
 
 		if (do_auto_refine && has_converged)
 		{
