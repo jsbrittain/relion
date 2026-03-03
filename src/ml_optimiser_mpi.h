@@ -20,146 +20,149 @@
 
 #ifndef ML_OPTIMISER_MPI_H_
 #define ML_OPTIMISER_MPI_H_
-#include "src/mpi.h"
 #include "src/ml_optimiser.h"
+#include "src/mpi.h"
 #ifdef RELION_UNIT_TESTS
 #include "gtest/gtest_prod.h"
 #endif
 
 // definition of MPITAG has been moved to header mpi.h
 
-class MlOptimiserMpi: public MlOptimiser
-{
-	std::vector<int> gpuDeviceShares;
+class MlOptimiserMpi : public MlOptimiser {
+  std::vector<int> gpuDeviceShares;
 
 public:
-	MpiNode *node;
+  MpiNode *node;
 
 #ifdef TIMINGMPI
-    int MPIR_PACK, MPIR_ALLREDUCE, MPIR_UNPACK, MPIR_EXP, MPIR_MAX, MPIR_BCAST;
+  int MPIR_PACK, MPIR_ALLREDUCE, MPIR_UNPACK, MPIR_EXP, MPIR_MAX, MPIR_BCAST;
 #endif
 
-    // For debugging: keep temporary/debug weight and data mrc files
-    bool do_keep_debug_reconstruct_files;
+  // For debugging: keep temporary/debug weight and data mrc files
+  bool do_keep_debug_reconstruct_files;
 
-    // For debugging: halt all followers except this one
-    int halt_all_followers_except_this;
+  // For debugging: halt all followers except this one
+  int halt_all_followers_except_this;
 
-    // Original verb
-    int ori_verb;
+  // Original verb
+  int ori_verb;
 
-	/** Destructor, calls MPI_Finalize */
-    ~MlOptimiserMpi()
-    {
-        delete node;
-    }
+  /** Destructor, calls MPI_Finalize */
+  ~MlOptimiserMpi() { delete node; }
 
-    /** Read
-     * This could take care of mpi-parallelisation-dependent variables
-     */
-    void read(int argc, char **argv);
+  /** Read
+   * This could take care of mpi-parallelisation-dependent variables
+   */
+  void read(int argc, char **argv);
 
-    /** Finalise
-     * Free some memory
-     */
-    void finalise();
+  /** Finalise
+   * Free some memory
+   */
+  void finalise();
 
-    void initialise();
+  void initialise();
 
-    /** Initialise the work load: divide images equally over all nodes
-     * Also initialise the same random seed for all nodes
-     */
-    void initialiseWorkLoad();
+  /** Initialise the work load: divide images equally over all nodes
+   * Also initialise the same random seed for all nodes
+   */
+  void initialiseWorkLoad();
 
-    /** Expectation
-     *  This cares care of gathering all weighted sums after the expectation
-     */
-    void expectation();
+  /** Expectation
+   *  This cares care of gathering all weighted sums after the expectation
+   */
+  void expectation();
 
-    /** After expectation combine all weighted sum arrays across all nodes
-     *  Use read/write to temporary files instead of MPI
-     */
-    void combineAllWeightedSumsViaFile();
+  /** After expectation combine all weighted sum arrays across all nodes
+   *  Use read/write to temporary files instead of MPI
+   */
+  void combineAllWeightedSumsViaFile();
 
-    /** Join the sums from two random halves
-     *  Use read/write to temporary files instead of MPI
-     */
-    void combineWeightedSumsTwoRandomHalvesViaFile();
+  /** Join the sums from two random halves
+   *  Use read/write to temporary files instead of MPI
+   */
+  void combineWeightedSumsTwoRandomHalvesViaFile();
 
-    /** After expectation combine all weighted sum arrays across all nodes
-     */
-    void combineAllWeightedSums();
+  /** After expectation combine all weighted sum arrays across all nodes
+   */
+  void combineAllWeightedSums();
 
-    /** Join the sums from two random halves
-     */
-    void combineWeightedSumsTwoRandomHalves();
+  /** Join the sums from two random halves
+   */
+  void combineWeightedSumsTwoRandomHalves();
 
-    /** Maximization
-     * This takes care of the parallel reconstruction of the classes
-     */
-    void maximization();
+  /** Maximization
+   * This takes care of the parallel reconstruction of the classes
+   */
+  void maximization();
 
-    void maximizationSyncGradientParameters();
-	void maximizationGradientParametersRandomHalves();
+  void maximizationSyncGradientParameters();
+  void maximizationGradientParametersRandomHalves();
 
-    /** Perform unregularized reconstruction
-      * With the aim of performing solvent mask corrected FSC inside the auto-refine
-      */
-    void reconstructUnregularisedMapAndCalculateSolventCorrectedFSC();
+  /** Perform unregularized reconstruction
+   * With the aim of performing solvent mask corrected FSC inside the
+   * auto-refine
+   */
+  void reconstructUnregularisedMapAndCalculateSolventCorrectedFSC();
 
-    /**
-     *  Write temporary data and weight arrays from the backprojector to disc to allow unregularized reconstructions
-     */
-    void writeTemporaryDataAndWeightArrays();
+  /**
+   *  Write temporary data and weight arrays from the backprojector to disc to
+   * allow unregularized reconstructions
+   */
+  void writeTemporaryDataAndWeightArrays();
 
-    /**
-     *  Read temporary data and weight arrays from disc and perform unregularized reconstructions
-     *  Also write the unregularized reconstructions to disc.
-     */
-    void readTemporaryDataAndWeightArraysAndReconstruct(int iclass, int ihalf);
+  /**
+   *  Read temporary data and weight arrays from disc and perform unregularized
+   * reconstructions Also write the unregularized reconstructions to disc.
+   */
+  void readTemporaryDataAndWeightArraysAndReconstruct(int iclass, int ihalf);
 
-    /**
-     * Join two independent reconstructions ate the lowest frequencies to avoid convergence in distinct orientations
-     */
-    void joinTwoHalvesAtLowResolution();
+  /**
+   * Join two independent reconstructions ate the lowest frequencies to avoid
+   * convergence in distinct orientations
+   */
+  void joinTwoHalvesAtLowResolution();
 
-    /** When refining two random halves separately, the leader receives both models, calculates FSC and the power of their difference
-     *  and sends these curves, together with new tau2_class estimates to all followers...
-     */
-    void compareTwoHalves();
+  /** When refining two random halves separately, the leader receives both
+   * models, calculates FSC and the power of their difference and sends these
+   * curves, together with new tau2_class estimates to all followers...
+   */
+  void compareTwoHalves();
 
-    /**
-     * Adjust angular sampling based on the expected angular accuracies for gradient optimization
-     */
-    void updateAngularSamplingGrad(long int my_first_part_id, long int my_last_part_id, bool verb = true);
+  /**
+   * Adjust angular sampling based on the expected angular accuracies for
+   * gradient optimization
+   */
+  void updateAngularSamplingGrad(long int my_first_part_id,
+                                 long int my_last_part_id, bool verb = true);
 
-    /**
-     * MPI aware verison of MlOptimiser::calculateExpectedAngularErrors
-     */
-	void calculateExpectedAngularErrors(long int my_first_part_id, long int my_last_part_id);
+  /**
+   * MPI aware verison of MlOptimiser::calculateExpectedAngularErrors
+   */
+  void calculateExpectedAngularErrors(long int my_first_part_id,
+                                      long int my_last_part_id);
 
-    /** Do the real work
-     * Expectation is split in image subsets over all nodes, each reconstruction is done on a separate node
-     */
-    void iterate();
+  /** Do the real work
+   * Expectation is split in image subsets over all nodes, each reconstruction
+   * is done on a separate node
+   */
+  void iterate();
 
 private:
-    void setupAccelerators();
-    void runLeaderExpectationLoop(MultidimArray<long int>& job_buf, long int my_nr_particles);
-    void runFollowerExpectationLoop(MultidimArray<long int>& job_buf);
+  void setupAccelerators();
+  void runLeaderExpectationLoop(MultidimArray<long int> &job_buf,
+                                long int my_nr_particles);
+  void runFollowerExpectationLoop(MultidimArray<long int> &job_buf);
 
 #ifdef RELION_UNIT_TESTS
-    // Grant access to the private extracted methods from unit tests.
-    // FRIEND_TEST expands to: friend class SuiteName_CaseName_Test
-    FRIEND_TEST(ExpectationRefactorMpiTest, SetupAcceleratorsNoOp);
-    FRIEND_TEST(ExpectationRefactorMpiTest, ZeroParticleDispatch);
+  // Grant access to the private extracted methods from unit tests.
+  // FRIEND_TEST expands to: friend class SuiteName_CaseName_Test
+  FRIEND_TEST(ExpectationRefactorMpiTest, SetupAcceleratorsNoOp);
+  FRIEND_TEST(ExpectationRefactorMpiTest, ZeroParticleDispatch);
 #endif
 
 #ifdef _SYCL_ENABLED
-	int syclDevicePerRank;
+  int syclDevicePerRank;
 #endif
-
 };
-
 
 #endif /*  ML_OPTIMISER_MPI_H_ */
