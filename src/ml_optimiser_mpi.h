@@ -156,7 +156,15 @@ public:
   void iterate();
 
 private:
+  void setupDevices();
+  void setupCudaHipDevices();
+  void setupSyclDevices();
   void setupAccelerators();
+  void broadcastRandomSeed();
+  void broadcastNrParticlesPerGroup(int halfset);
+  void combineAllWeightedSumsImpl();
+  void combineWeightedSumsTwoHalvesImpl();
+  void broadcastSplitHalfReconstruction(int ith_recons);
   void runLeaderExpectationLoop(MultidimArray<long int> &job_buf,
                                 long int my_nr_particles);
   void runFollowerExpectationLoop(MultidimArray<long int> &job_buf);
@@ -169,10 +177,16 @@ private:
   FRIEND_TEST(ExpectationRefactorMpiTest, SetupAcceleratorsAccOptimisersEmpty);
   FRIEND_TEST(ExpectationRefactorMpiTest, SetupAcceleratorsBackendOwnership);
   FRIEND_TEST(ExpectationRefactorMpiTest, PlainCpuBackendMethodsAreNoOps);
-#endif
-
-#ifdef _SYCL_ENABLED
-  int syclDevicePerRank;
+  FRIEND_TEST(ExpectationRefactorMpiTest,
+              BroadcastRandomSeedSetsConsistentSeed);
+  FRIEND_TEST(ExpectationRefactorMpiTest, BroadcastNrParticlesPerGroupHalfset1);
+  FRIEND_TEST(ExpectationRefactorMpiTest,
+              BroadcastNrParticlesPerGroupHalfset2NoopWith2Ranks);
+  FRIEND_TEST(ExpectationRefactorMpiTest, CombineAllWeightedSumsImplWith3Ranks);
+  FRIEND_TEST(ExpectationRefactorMpiTest,
+              CombineWeightedSumsTwoHalvesImplWith3Ranks);
+  FRIEND_TEST(ExpectationRefactorMpiTest,
+              BroadcastSplitHalfReconstructionWith3Ranks);
 #endif
 };
 

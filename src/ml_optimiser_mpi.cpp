@@ -25,7 +25,7 @@
 
 // #define PRINT_GPU_MEM_INFO
 // #define DEBUG
-// #define DEBUG_MPIEXP2
+// #define DEBUG_MPIEXP
 
 #ifdef TIMING
 int TIMING_MPIPACK = -1, TIMING_MPIWAIT = -1, TIMING_MPICOMBINEDISC = -1,
@@ -43,6 +43,15 @@ int TIMING_MPISLAVEWAIT1 = -1, TIMING_MPISLAVEWAIT2 = -1,
 #define DEBUG_PRINT std::cerr
 #else // Absorb debug print when not debugging
 #define DEBUG_PRINT                                                            \
+  if (true) {                                                                  \
+  } else                                                                       \
+    std::cerr
+#endif
+
+#ifdef DEBUG_MPIEXP
+#define DEBUG_PRINT_MPIEXP std::cerr
+#else // Absorb debug print when not debugging
+#define DEBUG_PRINT_MPIEXP                                                     \
   if (true) {                                                                  \
   } else                                                                       \
     std::cerr
@@ -90,25 +99,27 @@ void MlOptimiserMpi::read(int argc, char **argv) {
 }
 void MlOptimiserMpi::finalise() { delete node; }
 
-void MlOptimiserMpi::initialise() {
+// ===== CUDA/HIP backend device setup ========================================
+#if defined(_CUDA_ENABLED) || defined(_HIP_ENABLED)
+#ifdef _CUDA_ENABLED
+#define CUDA_HIP_DEVICE_IS_COMPATIBLE(prop)                                    \
+  ((prop).major > CUDA_CC_MAJOR ||                                             \
+   ((prop).major == CUDA_CC_MAJOR && (prop).minor >= CUDA_CC_MINOR))
+#else // HIP
+#define CUDA_HIP_DEVICE_IS_COMPATIBLE(prop) (true)
+#endif
 
-  DEBUG_PRINT << "MlOptimiserMpi::initialise Entering" << std::endl;
+static void warnGpuDoublePrecision(unsigned long long lowBoxLim) {
+#ifdef ACC_DOUBLE_PRECISION
+  int sLowBoxLim = (int)((float)lowBoxLim * pow(2, 1.0 / 3.0));
+  std::cerr << "You are also using double precison on the GPU. If you were "
+               "using single precision\n(which in all tested cases is "
+               "perfectly fine), then you could use an box-size of ~"
+            << sLowBoxLim << "." << std::endl;
+#endif
+}
 
-  // Print information about MPI nodes:
-  printMpiNodesMachineNames(*node, nr_threads);
-
-  if (gradient_refine && !do_split_random_halves) {
-    if (node->isLeader())
-      REPORT_ERROR("Gradient refinement is not supported together with MPI. "
-                   "\nPlease rerun with Number of MPI processes: 1");
-    else
-      exit(1);
-  }
-
-  grad_pseudo_halfsets = gradient_refine && !do_split_random_halves;
-#if defined _CUDA_ENABLED || defined _HIP_ENABLED
-  /************************************************************************/
-  // Setup GPU related resources
+void MlOptimiserMpi::setupCudaHipDevices() {
   int devCount, deviceAffinity;
   bool is_split(false);
 
@@ -133,15 +144,8 @@ void MlOptimiserMpi::initialise() {
       HANDLE_ERROR(accGPUGetDeviceCount(&devCount));
       for (int i = 0; i < devCount; i++) {
         HANDLE_ERROR(accGPUGetDeviceProperties(&deviceProp, i));
-#ifdef _CUDA_ENABLED
-        if (deviceProp.major > CUDA_CC_MAJOR)
+        if (CUDA_HIP_DEVICE_IS_COMPATIBLE(deviceProp))
           compatibleDevices += 1;
-        else if (deviceProp.major == CUDA_CC_MAJOR &&
-                 deviceProp.minor >= CUDA_CC_MINOR)
-          compatibleDevices += 1;
-#elif _HIP_ENABLED
-        compatibleDevices += 1;
-#endif
         // else
         // std::cout << "Rank " << node->rank  << " found a " << deviceProp.name
         // << " GPU with compute-capability " << deviceProp.major << "." <<
@@ -438,7 +442,6 @@ void MlOptimiserMpi::initialise() {
         temp.read(fn_data, fn_tomo, fn_motion, true, true);
 
         int t_ori_size = temp.getOpticsImageSize(0);
-        // temp.MDopt.getValue(EMDL_IMAGE_SIZE, t_ori_size, 0);
 
         if (LowBoxLim < t_ori_size) {
           anticipate_oom = true;
@@ -460,25 +463,22 @@ use of memory. In this case we recommend running a single mpi-follower per GPU, 
 will still yield good performance and possibly a more stable execution. \n"
                 << std::endl;
           }
-#ifdef ACC_DOUBLE_PRECISION
-          int sLowBoxLim = (int)((float)LowBoxLim * pow(2, 1.0 / 3.0));
-          std::cerr
-              << "You are also using double precison on the GPU. If you were using single precision\n\
-(which in all tested cases is perfectly fine), then you could use an box-size of ~"
-              << sLowBoxLim << "." << std::endl;
-#endif
+          warnGpuDoublePrecision(LowBoxLim);
           std::cerr << std::endl << std::endl;
         }
       }
     }
     mymodel.do_gpu = do_gpu;
   }
-  /************************************************************************/
+}
+
+#else  // neither CUDA nor HIP
+void MlOptimiserMpi::setupCudaHipDevices() {}
 #endif // _CUDA_ENABLED or _HIP_ENABLED
+
+// ===== SYCL backend device setup ============================================
 #ifdef _SYCL_ENABLED
-  /************************************************************************/
-  // Setup SYCL
-  /************************************************************************/
+void MlOptimiserMpi::setupSyclDevices() {
   if (do_sycl) {
     if (node->isLeader()) {
       if (!std::isdigit(*gpu_ids.begin())) {
@@ -681,18 +681,9 @@ will still yield good performance and possibly a more stable execution. \n"
         int dev_id;
         if (semiAutomaticMapping) {
           if (fullAutomaticMapping) {
-#if 1
             // Do not span multiple devices between threads for automatic
             // mapping
             dev_id = devCount * ((node->rank - 1) % nodeSize) / nodeSize;
-#else
-            if (nodeSize > 1)
-              dev_id = (devCount *
-                        (((node->rank - 1) % nodeSize) * nr_threads + i)) /
-                       (nodeSize * nr_threads);
-            else
-              dev_id = devCount * i / nr_threads;
-#endif
           } else
             dev_id = textToInteger(
                 allThreadIDs[node->rank - 1]
@@ -752,7 +743,35 @@ will still yield good performance and possibly a more stable execution. \n"
     }
     node->barrierWait();
   }
-#endif // End of SYCL
+}
+
+#else  // _SYCL_ENABLED not defined
+void MlOptimiserMpi::setupSyclDevices() {}
+#endif // _SYCL_ENABLED
+
+// ===== Device setup: dispatches to all enabled backends =====================
+void MlOptimiserMpi::setupDevices() {
+  setupCudaHipDevices();
+  setupSyclDevices();
+}
+
+void MlOptimiserMpi::initialise() {
+
+  DEBUG_PRINT << "MlOptimiserMpi::initialise Entering" << std::endl;
+
+  // Print information about MPI nodes:
+  printMpiNodesMachineNames(*node, nr_threads);
+
+  if (gradient_refine && !do_split_random_halves) {
+    if (node->isLeader())
+      REPORT_ERROR("Gradient refinement is not supported together with MPI. "
+                   "\nPlease rerun with Number of MPI processes: 1");
+    else
+      exit(1);
+  }
+
+  grad_pseudo_halfsets = gradient_refine && !do_split_random_halves;
+  setupDevices();
 
   // Split the data into two random halves
   if (do_split_random_halves) {
@@ -819,6 +838,405 @@ will still yield good performance and possibly a more stable execution. \n"
   DEBUG_PRINT << "MlOptimiserMpi::initialise Done" << std::endl;
 }
 
+// ===== MPI collective vs point-to-point communication implementations =======
+#ifdef USE_MPI_COLLECTIVE
+
+void MlOptimiserMpi::broadcastRandomSeed() {
+  if (node->isLeader())
+    random_seed = time(NULL);
+  node->relion_MPI_Bcast(&random_seed, 1, MPI_INT, 0, MPI_COMM_WORLD);
+}
+
+void MlOptimiserMpi::broadcastNrParticlesPerGroup(int halfset) {
+  MPI_Comm comm = (halfset == 1) ? node->root_oddC : node->root_evenC;
+  int other_halfset = (halfset == 1) ? 2 : 1;
+  if (node->myRandomSubset() != other_halfset)
+    node->relion_MPI_Bcast(&mymodel.nr_particles_per_group[0],
+                           mymodel.nr_particles_per_group.size(), MPI_LONG, 0,
+                           comm);
+}
+
+void MlOptimiserMpi::combineAllWeightedSumsImpl() {
+  if (!node->isLeader()) {
+    MultidimArray<RFLOAT> Mpack, Msum;
+    wsum_model.pack(Mpack);
+    Msum.initZeros(Mpack);
+    if (do_split_random_halves)
+      node->relion_MPI_Allreduce(MULTIDIM_ARRAY(Mpack), MULTIDIM_ARRAY(Msum),
+                                 MULTIDIM_SIZE(Mpack), MY_MPI_DOUBLE, MPI_SUM,
+                                 node->splitC);
+    else
+      node->relion_MPI_Allreduce(MULTIDIM_ARRAY(Mpack), MULTIDIM_ARRAY(Msum),
+                                 MULTIDIM_SIZE(Mpack), MY_MPI_DOUBLE, MPI_SUM,
+                                 node->followerC);
+    if (node->rank == 1) {
+      DEBUG_PRINT << " MPI_Allreduce MULTIDIM_SIZE(Mpack)= "
+                  << MULTIDIM_SIZE(Mpack) << std::endl;
+    }
+    Mpack.clear();
+    wsum_model.unpack(Msum);
+  }
+}
+
+void MlOptimiserMpi::combineWeightedSumsTwoHalvesImpl() {
+  MultidimArray<RFLOAT> Mpack, Msum;
+  MPI_Status status;
+  if (!node->isLeader()) {
+    if (node->rank == 1) {
+      if (verb > 0)
+        std::cout << " Combining two random halves ..." << std::endl;
+      wsum_model.pack(Mpack);
+      Msum.resize(wsum_model.getPackSize());
+      node->relion_MPI_Recv(MULTIDIM_ARRAY(Msum), MULTIDIM_SIZE(Msum),
+                            MY_MPI_DOUBLE, 2, MPITAG_PACK, MPI_COMM_WORLD,
+                            status);
+      Mpack += Msum;
+      Msum.clear();
+    } else if (node->rank == 2) {
+      wsum_model.pack(Mpack);
+      node->relion_MPI_Send(MULTIDIM_ARRAY(Mpack), MULTIDIM_SIZE(Mpack),
+                            MY_MPI_DOUBLE, 1, MPITAG_PACK, MPI_COMM_WORLD);
+    } else
+      Mpack.resize(wsum_model.getPackSize());
+    // rank one sends Mpack to everyone else
+    node->relion_MPI_Bcast(MULTIDIM_ARRAY(Mpack), MULTIDIM_SIZE(Mpack),
+                           MY_MPI_DOUBLE, 0, node->followerC);
+    // Everyone unpacks the new Mpack
+    wsum_model.unpack(Mpack);
+  }
+}
+
+void MlOptimiserMpi::broadcastSplitHalfReconstruction(int ith_recons) {
+  if (!node->isLeader()) {
+    int reconstruct_rank =
+        2 * (ith_recons % ((node->size - 1) / 2)) + node->myRandomSubset();
+    int split_rank = node->getSplitRank(reconstruct_rank);
+    node->relion_MPI_Bcast(MULTIDIM_ARRAY(mymodel.Iref[ith_recons]),
+                           MULTIDIM_SIZE(mymodel.Iref[ith_recons]),
+                           MY_MPI_DOUBLE, split_rank, node->splitC);
+    if (do_grad) {
+      node->relion_MPI_Bcast(MULTIDIM_ARRAY(mymodel.Igrad1[ith_recons]),
+                             MULTIDIM_SIZE(mymodel.Igrad1[ith_recons]),
+                             MY_MPI_DOUBLE, split_rank, node->splitC);
+      node->relion_MPI_Bcast(MULTIDIM_ARRAY(mymodel.Igrad2[ith_recons]),
+                             MULTIDIM_SIZE(mymodel.Igrad2[ith_recons]),
+                             MY_MPI_DOUBLE, split_rank, node->splitC);
+    }
+    node->relion_MPI_Bcast(
+        MULTIDIM_ARRAY(mymodel.data_vs_prior_class[ith_recons]),
+        MULTIDIM_SIZE(mymodel.data_vs_prior_class[ith_recons]), MY_MPI_DOUBLE,
+        split_rank, node->splitC);
+    node->relion_MPI_Bcast(
+        MULTIDIM_ARRAY(mymodel.fourier_coverage_class[ith_recons]),
+        MULTIDIM_SIZE(mymodel.fourier_coverage_class[ith_recons]),
+        MY_MPI_DOUBLE, split_rank, node->splitC);
+    node->relion_MPI_Bcast(MULTIDIM_ARRAY(mymodel.sigma2_class[ith_recons]),
+                           MULTIDIM_SIZE(mymodel.sigma2_class[ith_recons]),
+                           MY_MPI_DOUBLE, split_rank, node->splitC);
+  }
+}
+
+#else // USE_MPI_COLLECTIVE not defined: point-to-point
+
+void MlOptimiserMpi::broadcastRandomSeed() {
+  if (node->isLeader()) {
+    random_seed = time(NULL);
+    for (int follower = 1; follower < node->size; follower++)
+      node->relion_MPI_Send(&random_seed, 1, MPI_INT, follower,
+                            MPITAG_RANDOMSEED, MPI_COMM_WORLD);
+  } else {
+    MPI_Status status;
+    node->relion_MPI_Recv(&random_seed, 1, MPI_INT, 0, MPITAG_RANDOMSEED,
+                          MPI_COMM_WORLD, status);
+  }
+}
+
+void MlOptimiserMpi::broadcastNrParticlesPerGroup(int halfset) {
+  for (int follower = halfset; follower < node->size; follower += 2) {
+    MPI_Status status;
+    if (node->isLeader())
+      node->relion_MPI_Send(&mymodel.nr_particles_per_group[0],
+                            mymodel.nr_particles_per_group.size(), MPI_LONG,
+                            follower, MPITAG_METADATA, MPI_COMM_WORLD);
+    else if (node->rank == follower)
+      node->relion_MPI_Recv(&mymodel.nr_particles_per_group[0],
+                            mymodel.nr_particles_per_group.size(), MPI_LONG, 0,
+                            MPITAG_METADATA, MPI_COMM_WORLD, status);
+  }
+}
+
+void MlOptimiserMpi::combineAllWeightedSumsImpl() {
+  const int nr_halfsets = do_split_random_halves ? 2 : 1;
+  MultidimArray<RFLOAT> Mpack, Msum;
+  MPI_Status status;
+  // Loop over possibly multiple instances of Mpack of maximum size
+  int piece = 0;
+  int nr_pieces = 1;
+  while (piece < nr_pieces) {
+    // All nodes except those who will reset nr_pieces piece will pass while
+    // loop in next pass
+    nr_pieces = 0;
+
+    // First all followers pack up their wsum_model
+    if (!node->isLeader()) {
+      wsum_model.pack(Mpack, piece, nr_pieces);
+      // The first follower(s) set Msum equal to Mpack, the others initialise
+      // to zero
+      if (node->rank <= nr_halfsets)
+        Msum = Mpack;
+      else
+        Msum.initZeros(Mpack);
+    }
+
+    // Loop through all followers: each follower sends its Msum to the next
+    // follower for its subset. Each next follower sums its own Mpack to the
+    // received Msum and sends it on to the next follower
+    for (int this_follower = 1; this_follower < node->size; this_follower++) {
+      // Find out who is the first follower in this subset
+      int first_follower;
+      if (!do_split_random_halves)
+        first_follower = 1;
+      else
+        first_follower = (this_follower % 2 == 1) ? 1 : 2;
+
+      // Find out who is the next follower in this subset
+      int other_follower = this_follower + nr_halfsets;
+
+      if (other_follower < node->size) {
+        if (node->rank == this_follower) {
+          DEBUG_PRINT << " AA SEND node->rank= " << node->rank
+                      << " MULTIDIM_SIZE(Msum)= " << MULTIDIM_SIZE(Msum)
+                      << " this_follower= " << this_follower
+                      << " other_follower= " << other_follower << std::endl;
+          node->relion_MPI_Send(MULTIDIM_ARRAY(Msum), MULTIDIM_SIZE(Msum),
+                                MY_MPI_DOUBLE, other_follower, MPITAG_PACK,
+                                MPI_COMM_WORLD);
+        } else if (node->rank == other_follower) {
+          node->relion_MPI_Recv(MULTIDIM_ARRAY(Msum), MULTIDIM_SIZE(Msum),
+                                MY_MPI_DOUBLE, this_follower, MPITAG_PACK,
+                                MPI_COMM_WORLD, status);
+          DEBUG_PRINT << " AA RECV node->rank= " << node->rank
+                      << " MULTIDIM_SIZE(Msum)= " << MULTIDIM_SIZE(Msum)
+                      << " this_follower= " << this_follower
+                      << " other_follower= " << other_follower << std::endl;
+          // Add my own Mpack to send onwards in the next step
+          Msum += Mpack;
+        }
+      } else {
+        // Now this_follower has reached the last follower, which passes the
+        // final Msum to the first one (i.e. first_follower)
+        if (node->rank == this_follower) {
+          DEBUG_PRINT << " BB SEND node->rank= " << node->rank
+                      << " MULTIDIM_SIZE(Msum)= " << MULTIDIM_SIZE(Msum)
+                      << " this_follower= " << this_follower
+                      << " first_follower= " << first_follower;
+          node->relion_MPI_Send(MULTIDIM_ARRAY(Msum), MULTIDIM_SIZE(Msum),
+                                MY_MPI_DOUBLE, first_follower, MPITAG_PACK,
+                                MPI_COMM_WORLD);
+        } else if (node->rank == first_follower) {
+          node->relion_MPI_Recv(MULTIDIM_ARRAY(Msum), MULTIDIM_SIZE(Msum),
+                                MY_MPI_DOUBLE, this_follower, MPITAG_PACK,
+                                MPI_COMM_WORLD, status);
+          DEBUG_PRINT << " BB RECV node->rank= " << node->rank
+                      << " MULTIDIM_SIZE(Msum)= " << MULTIDIM_SIZE(Msum)
+                      << " this_follower= " << this_follower
+                      << " first_follower= " << first_follower << std::endl;
+        }
+      }
+    } // end for this_follower
+
+    // Now loop through all followers again to pass around the Msum
+    for (int this_follower = 1; this_follower < node->size; this_follower++) {
+      // Find out who is the next follower in this subset
+      int other_follower = this_follower + nr_halfsets;
+
+      // Do not send to the last follower, because it already had its Msum
+      // from the cycle above, therefore subtract nr_halfsets from node->size
+      if (other_follower < node->size - nr_halfsets) {
+        if (node->rank == this_follower) {
+          DEBUG_PRINT << " CC SEND node->rank= " << node->rank
+                      << " MULTIDIM_SIZE(Msum)= " << MULTIDIM_SIZE(Msum)
+                      << " this_follower= " << this_follower
+                      << " other_follower= " << other_follower << std::endl;
+          node->relion_MPI_Send(MULTIDIM_ARRAY(Msum), MULTIDIM_SIZE(Msum),
+                                MY_MPI_DOUBLE, other_follower, MPITAG_PACK,
+                                MPI_COMM_WORLD);
+        } else if (node->rank == other_follower) {
+          node->relion_MPI_Recv(MULTIDIM_ARRAY(Msum), MULTIDIM_SIZE(Msum),
+                                MY_MPI_DOUBLE, this_follower, MPITAG_PACK,
+                                MPI_COMM_WORLD, status);
+          DEBUG_PRINT << " CC RECV node->rank= " << node->rank
+                      << " MULTIDIM_SIZE(Msum)= " << MULTIDIM_SIZE(Msum)
+                      << " this_follower= " << this_follower
+                      << " other_follower= " << other_follower << std::endl;
+        }
+      }
+    } // end for this_follower
+
+    // Finally all followers unpack Msum into their wsum_model
+    if (!node->isLeader()) {
+      // Subtract 1 from piece because it was incremented already...
+      wsum_model.unpack(Msum, piece - 1);
+    }
+
+  } // end for piece
+
+  MPI_Barrier(MPI_COMM_WORLD);
+}
+
+void MlOptimiserMpi::combineWeightedSumsTwoHalvesImpl() {
+  MultidimArray<RFLOAT> Mpack, Msum;
+  MPI_Status status;
+  int piece = 0;
+  int nr_pieces = 1;
+  long int pack_size;
+  while (piece < nr_pieces) {
+    // All nodes except those who will reset nr_pieces will pass while next time
+    nr_pieces = 0;
+
+    if (node->rank == 2) {
+      wsum_model.pack(Mpack, piece, nr_pieces,
+                      false); // do not clear the model!
+      node->relion_MPI_Send(MULTIDIM_ARRAY(Mpack), MULTIDIM_SIZE(Mpack),
+                            MY_MPI_DOUBLE, 1, MPITAG_PACK, MPI_COMM_WORLD);
+      Mpack.clear();
+    } else if (node->rank == 1) {
+      if (verb > 0)
+        std::cout << " Combining two random halves ..." << std::endl;
+      wsum_model.pack(Mpack, piece, nr_pieces);
+      Msum.initZeros(Mpack);
+      node->relion_MPI_Recv(MULTIDIM_ARRAY(Msum), MULTIDIM_SIZE(Msum),
+                            MY_MPI_DOUBLE, 2, MPITAG_PACK, MPI_COMM_WORLD,
+                            status);
+      Msum += Mpack;
+      // Unpack the sum (subtract 1 from piece because it was incremented
+      // already...)
+      wsum_model.unpack(Msum, piece - 1);
+      Msum.clear();
+      Mpack.clear();
+    }
+  }
+
+  // Now follower 1 has the sum of the two halves
+  MPI_Barrier(MPI_COMM_WORLD);
+
+  // Bcast to everyone
+  piece = 0;
+  nr_pieces = 1;
+  while (piece < nr_pieces) {
+
+    // All nodes except those who will reset nr_pieces will pass while next time
+    nr_pieces = 0;
+
+    // The leader does not have a wsum_model!
+    if (!node->isLeader()) {
+      // Let's have everyone repack their Mpack, so we know the size etc
+      wsum_model.pack(Mpack, piece, nr_pieces);
+
+      // rank one sends Mpack to everyone else
+      if (node->rank == 1) {
+        for (int other_follower = 2; other_follower < node->size;
+             other_follower++)
+          node->relion_MPI_Send(MULTIDIM_ARRAY(Mpack), MULTIDIM_SIZE(Mpack),
+                                MY_MPI_DOUBLE, other_follower, MPITAG_PACK,
+                                MPI_COMM_WORLD);
+      } else {
+        node->relion_MPI_Recv(MULTIDIM_ARRAY(Mpack), MULTIDIM_SIZE(Mpack),
+                              MY_MPI_DOUBLE, 1, MPITAG_PACK, MPI_COMM_WORLD,
+                              status);
+      }
+
+      // Everyone unpacks the new Mpack
+      wsum_model.unpack(Mpack, piece - 1);
+      Mpack.clear();
+    }
+  }
+}
+
+void MlOptimiserMpi::broadcastSplitHalfReconstruction(int ith_recons) {
+  MPI_Status status;
+  int nr_halfsets = 2;
+  for (int ihalfset = 1; ihalfset <= nr_halfsets; ihalfset++) {
+    if (node->myRandomSubset() == ihalfset) {
+      int reconstruct_rank =
+          2 * (ith_recons % ((node->size - 1) / 2)) +
+          ihalfset; // first pass halfset1, second pass halfset2
+      int my_first_recv = node->myRandomSubset();
+
+      for (int recv_node = my_first_recv; recv_node < node->size;
+           recv_node += nr_halfsets) {
+        if (node->rank == reconstruct_rank && recv_node != node->rank) {
+          DEBUG_PRINT << "ihalfset= " << ihalfset
+                      << " Sending iclass=" << ith_recons << " from node "
+                      << reconstruct_rank << " to node " << recv_node
+                      << std::endl;
+          node->relion_MPI_Send(MULTIDIM_ARRAY(mymodel.Iref[ith_recons]),
+                                MULTIDIM_SIZE(mymodel.Iref[ith_recons]),
+                                MY_MPI_DOUBLE, recv_node, MPITAG_IMAGE,
+                                MPI_COMM_WORLD);
+          if (do_grad) {
+            node->relion_MPI_Send(MULTIDIM_ARRAY(mymodel.Igrad1[ith_recons]),
+                                  MULTIDIM_SIZE(mymodel.Igrad1[ith_recons]),
+                                  MY_MPI_DOUBLE, recv_node, MPITAG_IMAGE,
+                                  MPI_COMM_WORLD);
+            node->relion_MPI_Send(MULTIDIM_ARRAY(mymodel.Igrad2[ith_recons]),
+                                  MULTIDIM_SIZE(mymodel.Igrad2[ith_recons]),
+                                  MY_MPI_DOUBLE, recv_node, MPITAG_IMAGE,
+                                  MPI_COMM_WORLD);
+          }
+          node->relion_MPI_Send(
+              MULTIDIM_ARRAY(mymodel.data_vs_prior_class[ith_recons]),
+              MULTIDIM_SIZE(mymodel.data_vs_prior_class[ith_recons]),
+              MY_MPI_DOUBLE, recv_node, MPITAG_METADATA, MPI_COMM_WORLD);
+          node->relion_MPI_Send(
+              MULTIDIM_ARRAY(mymodel.fourier_coverage_class[ith_recons]),
+              MULTIDIM_SIZE(mymodel.fourier_coverage_class[ith_recons]),
+              MY_MPI_DOUBLE, recv_node, MPITAG_METADATA, MPI_COMM_WORLD);
+          node->relion_MPI_Send(
+              MULTIDIM_ARRAY(mymodel.sigma2_class[ith_recons]),
+              MULTIDIM_SIZE(mymodel.sigma2_class[ith_recons]), MY_MPI_DOUBLE,
+              recv_node, MPITAG_RFLOAT, MPI_COMM_WORLD);
+        } else if (node->rank != reconstruct_rank && node->rank == recv_node) {
+          node->relion_MPI_Recv(MULTIDIM_ARRAY(mymodel.Iref[ith_recons]),
+                                MULTIDIM_SIZE(mymodel.Iref[ith_recons]),
+                                MY_MPI_DOUBLE, reconstruct_rank, MPITAG_IMAGE,
+                                MPI_COMM_WORLD, status);
+          if (do_grad) {
+            node->relion_MPI_Recv(MULTIDIM_ARRAY(mymodel.Igrad1[ith_recons]),
+                                  MULTIDIM_SIZE(mymodel.Igrad1[ith_recons]),
+                                  MY_MPI_DOUBLE, reconstruct_rank, MPITAG_IMAGE,
+                                  MPI_COMM_WORLD, status);
+            node->relion_MPI_Recv(MULTIDIM_ARRAY(mymodel.Igrad2[ith_recons]),
+                                  MULTIDIM_SIZE(mymodel.Igrad2[ith_recons]),
+                                  MY_MPI_DOUBLE, reconstruct_rank, MPITAG_IMAGE,
+                                  MPI_COMM_WORLD, status);
+          }
+          node->relion_MPI_Recv(
+              MULTIDIM_ARRAY(mymodel.data_vs_prior_class[ith_recons]),
+              MULTIDIM_SIZE(mymodel.data_vs_prior_class[ith_recons]),
+              MY_MPI_DOUBLE, reconstruct_rank, MPITAG_METADATA, MPI_COMM_WORLD,
+              status);
+          node->relion_MPI_Recv(
+              MULTIDIM_ARRAY(mymodel.fourier_coverage_class[ith_recons]),
+              MULTIDIM_SIZE(mymodel.fourier_coverage_class[ith_recons]),
+              MY_MPI_DOUBLE, reconstruct_rank, MPITAG_METADATA, MPI_COMM_WORLD,
+              status);
+          node->relion_MPI_Recv(
+              MULTIDIM_ARRAY(mymodel.sigma2_class[ith_recons]),
+              MULTIDIM_SIZE(mymodel.sigma2_class[ith_recons]), MY_MPI_DOUBLE,
+              reconstruct_rank, MPITAG_RFLOAT, MPI_COMM_WORLD, status);
+          DEBUG_PRINT << "ihalfset= " << ihalfset
+                      << " Received!!!=" << ith_recons << " from node "
+                      << reconstruct_rank << " at node " << node->rank
+                      << std::endl;
+        }
+      }
+    }
+  }
+}
+
+#endif // USE_MPI_COLLECTIVE
+
 void MlOptimiserMpi::initialiseWorkLoad() {
   if (do_split_random_halves) {
     if (node->size <= 2)
@@ -834,25 +1252,8 @@ void MlOptimiserMpi::initialiseWorkLoad() {
                  "are required, otherwise use the sequential program");
 
   // Get the same random number generator seed for all mpi nodes
-  if (random_seed == -1) {
-#ifdef USE_MPI_COLLECTIVE
-    if (node->isLeader())
-      random_seed = time(NULL);
-
-    node->relion_MPI_Bcast(&random_seed, 1, MPI_INT, 0, MPI_COMM_WORLD);
-#else
-    if (node->isLeader()) {
-      random_seed = time(NULL);
-      for (int follower = 1; follower < node->size; follower++)
-        node->relion_MPI_Send(&random_seed, 1, MPI_INT, follower,
-                              MPITAG_RANDOMSEED, MPI_COMM_WORLD);
-    } else {
-      MPI_Status status;
-      node->relion_MPI_Recv(&random_seed, 1, MPI_INT, 0, MPITAG_RANDOMSEED,
-                            MPI_COMM_WORLD, status);
-    }
-#endif
-  }
+  if (random_seed == -1)
+    broadcastRandomSeed();
 
   // Also randomize random-number-generator for perturbations on the angles
   init_random_generator(random_seed);
@@ -869,46 +1270,12 @@ void MlOptimiserMpi::initialiseWorkLoad() {
     // First do half-set 1
     if (node->isLeader())
       mydata.getNumberOfParticlesPerGroup(mymodel.nr_particles_per_group, 1);
-#ifdef USE_MPI_COLLECTIVE
-    if (node->myRandomSubset() != 2)
-      node->relion_MPI_Bcast(&mymodel.nr_particles_per_group[0],
-                             mymodel.nr_particles_per_group.size(), MPI_LONG, 0,
-                             node->root_oddC);
-#else
-    for (int follower = 1; follower < node->size; follower += 2) {
-      MPI_Status status;
-      if (node->isLeader())
-        node->relion_MPI_Send(&mymodel.nr_particles_per_group[0],
-                              mymodel.nr_particles_per_group.size(), MPI_LONG,
-                              follower, MPITAG_METADATA, MPI_COMM_WORLD);
-      else if (node->rank == follower)
-        node->relion_MPI_Recv(&mymodel.nr_particles_per_group[0],
-                              mymodel.nr_particles_per_group.size(), MPI_LONG,
-                              0, MPITAG_METADATA, MPI_COMM_WORLD, status);
-    }
-#endif
+    broadcastNrParticlesPerGroup(1);
 
     // Then do half-set 2
     if (node->isLeader())
       mydata.getNumberOfParticlesPerGroup(mymodel.nr_particles_per_group, 2);
-#ifdef USE_MPI_COLLECTIVE
-    if (node->myRandomSubset() != 1)
-      node->relion_MPI_Bcast(&mymodel.nr_particles_per_group[0],
-                             mymodel.nr_particles_per_group.size(), MPI_LONG, 0,
-                             node->root_evenC);
-#else
-    for (int follower = 2; follower < node->size; follower += 2) {
-      MPI_Status status;
-      if (node->isLeader())
-        node->relion_MPI_Send(&mymodel.nr_particles_per_group[0],
-                              mymodel.nr_particles_per_group.size(), MPI_LONG,
-                              follower, MPITAG_METADATA, MPI_COMM_WORLD);
-      else if (node->rank == follower)
-        node->relion_MPI_Recv(&mymodel.nr_particles_per_group[0],
-                              mymodel.nr_particles_per_group.size(), MPI_LONG,
-                              0, MPITAG_METADATA, MPI_COMM_WORLD, status);
-    }
-#endif
+    broadcastNrParticlesPerGroup(2);
   } else {
     if (node->isLeader())
       mydata.getNumberOfParticlesPerGroup(mymodel.nr_particles_per_group);
@@ -1026,18 +1393,14 @@ void MlOptimiserMpi::initialiseWorkLoad() {
 
 void MlOptimiserMpi::setupAccelerators() {
   // Phase 1: create bundles and per-thread optimisers.
-  // CUDA/HIP requires a barrier before and after (two-phase GPU memory setup).
-#if defined _CUDA_ENABLED || defined _HIP_ENABLED
+  // Two-phase GPU memory setup requires barriers around bundle creation.
   MPI_Barrier(MPI_COMM_WORLD);
-#endif
   if (!node->isLeader()) {
     accBackend = makeAccBackend(do_gpu, do_sycl, do_cpu).release();
     accBackend->createBundles(*this);
     accBackend->createOptimisers(*this);
   }
-#if defined _CUDA_ENABLED || defined _HIP_ENABLED
   MPI_Barrier(MPI_COMM_WORLD);
-#endif
   // Phase 2: finalise tunable-sized GPU memory (no-op for other backends).
   if (!node->isLeader() && accBackend)
     accBackend->finalizeBundles(*this);
@@ -1116,13 +1479,12 @@ void MlOptimiserMpi::runLeaderExpectationLoop(MultidimArray<long int> &job_buf,
       // Which follower sent this request?
       int this_follower = status.MPI_SOURCE;
 
-// #define DEBUG_MPIEXP2
-#ifdef DEBUG_MPIEXP2
-      std::cerr << " MASTER RECEIVING from follower= " << this_follower
-                << " JOB_FIRST= " << job_first << " JOB_LAST= " << job_last
-                << " JOB_NIMG= " << job_nimg
-                << " JOB_NPAR= " << (job_last - job_first + 1) << std::endl;
-#endif
+      DEBUG_PRINT_MPIEXP << " MASTER RECEIVING from follower= " << this_follower
+                         << " JOB_FIRST= " << job_first
+                         << " JOB_LAST= " << job_last
+                         << " JOB_NIMG= " << job_nimg
+                         << " JOB_NPAR= " << (job_last - job_first + 1)
+                         << std::endl;
       // The first time a follower reports it only asks for input, but does not
       // send output of a previous processing task. In that case job_nimg==0
       // Otherwise, the leader needs to receive and handle the updated metadata
@@ -1205,17 +1567,17 @@ void MlOptimiserMpi::runLeaderExpectationLoop(MultidimArray<long int> &job_buf,
 
       // std::cerr << "subset= " << subset << " half-set= " << random_halfset
       //		<< " nr_subset_particles_done= " <<
-      //nr_subset_particles_done
+      // nr_subset_particles_done
       //		<< " nr_particles_todo=" << nr_particles_todo <<
       //		" JOB_FIRST= " << job_first << " JOB_LAST= " << job_last
       //<< std::endl;
 
-#ifdef DEBUG_MPIEXP2
-      std::cerr << " MASTER SENDING to follower= " << this_follower
-                << " JOB_FIRST= " << job_first << " JOB_LAST= " << job_last
-                << " JOB_NIMG= " << job_nimg
-                << " JOB_NPAR= " << (job_last - job_first + 1) << std::endl;
-#endif
+      DEBUG_PRINT_MPIEXP << " MASTER SENDING to follower= " << this_follower
+                         << " JOB_FIRST= " << job_first
+                         << " JOB_LAST= " << job_last
+                         << " JOB_NIMG= " << job_nimg
+                         << " JOB_NPAR= " << (job_last - job_first + 1)
+                         << std::endl;
       node->relion_MPI_Send(MULTIDIM_ARRAY(job_buf), MULTIDIM_SIZE(job_buf),
                             MPI_LONG, this_follower, MPITAG_JOB_REPLY,
                             MPI_COMM_WORLD);
@@ -1384,11 +1746,9 @@ void MlOptimiserMpi::runFollowerExpectationLoop(
         }
 
         // Now process these images
-#ifdef DEBUG_MPIEXP
-        std::cerr << " SLAVE EXECUTING node->rank= " << node->rank
-                  << " JOB_FIRST= " << job_first << " JOB_LAST= " << job_last
-                  << std::endl;
-#endif
+        DEBUG_PRINT_MPIEXP << " SLAVE EXECUTING node->rank= " << node->rank
+                           << " JOB_FIRST= " << job_first
+                           << " JOB_LAST= " << job_last << std::endl;
         TIMER_TOC(TIMING_MPISLAVEWAIT2);
         TIMER_TIC(TIMING_MPISLAVEWORK);
         expectationSomeParticles(job_first, job_last);
@@ -1768,156 +2128,13 @@ void MlOptimiserMpi::combineAllWeightedSumsViaFile() {
 void MlOptimiserMpi::combineAllWeightedSums() {
   TIMER_TIC(TIMING_MPICOMBINENETW);
 
-  // Pack all weighted sums in Mpack
-  MultidimArray<RFLOAT> Mpack, Msum;
-  MPI_Status status;
-
-  // First follower manually sums over all other followers of it's subset
-  // And then sends results back to all those followers
   // When splitting the data into two random halves, perform two passes: one for
   // each subset
   int nr_halfsets = (do_split_random_halves) ? 2 : 1;
   DEBUG_PRINT << " starting combineAllWeightedSums..." << std::endl;
   // Only combine weighted sums if there are more than one followers per subset!
-  if ((node->size - 1) / nr_halfsets > 1) {
-#ifdef USE_MPI_COLLECTIVE
-    if (!node->isLeader()) {
-      // First all followers pack up their wsum_model
-      wsum_model.pack(Mpack);
-      Msum.initZeros(Mpack);
-
-      if (do_split_random_halves)
-        node->relion_MPI_Allreduce(MULTIDIM_ARRAY(Mpack), MULTIDIM_ARRAY(Msum),
-                                   MULTIDIM_SIZE(Mpack), MY_MPI_DOUBLE, MPI_SUM,
-                                   node->splitC);
-      else
-        node->relion_MPI_Allreduce(MULTIDIM_ARRAY(Mpack), MULTIDIM_ARRAY(Msum),
-                                   MULTIDIM_SIZE(Mpack), MY_MPI_DOUBLE, MPI_SUM,
-                                   node->followerC);
-      if (node->rank == 1) {
-        DEBUG_PRINT << " MPI_Allreduce MULTIDIM_SIZE(Mpack)= "
-                    << MULTIDIM_SIZE(Mpack) << std::endl;
-      }
-
-      Mpack.clear();
-      wsum_model.unpack(Msum);
-    }
-#else
-    // Loop over possibly multiple instances of Mpack of maximum size
-    int piece = 0;
-    int nr_pieces = 1;
-    while (piece < nr_pieces) {
-      // All nodes except those who will reset nr_pieces piece will pass while
-      // loop in next pass
-      nr_pieces = 0;
-
-      // First all followers pack up their wsum_model
-      if (!node->isLeader()) {
-        wsum_model.pack(Mpack, piece, nr_pieces);
-        // The first follower(s) set Msum equal to Mpack, the others initialise
-        // to zero
-        if (node->rank <= nr_halfsets)
-          Msum = Mpack;
-        else
-          Msum.initZeros(Mpack);
-      }
-
-      // Loop through all followers: each follower sends its Msum to the next
-      // follower for its subset. Each next follower sums its own Mpack to the
-      // received Msum and sends it on to the next follower
-      for (int this_follower = 1; this_follower < node->size; this_follower++) {
-        // Find out who is the first follower in this subset
-        int first_follower;
-        if (!do_split_random_halves)
-          first_follower = 1;
-        else
-          first_follower = (this_follower % 2 == 1) ? 1 : 2;
-
-        // Find out who is the next follower in this subset
-        int other_follower = this_follower + nr_halfsets;
-
-        if (other_follower < node->size) {
-          if (node->rank == this_follower) {
-            DEBUG_PRINT << " AA SEND node->rank= " << node->rank
-                        << " MULTIDIM_SIZE(Msum)= " << MULTIDIM_SIZE(Msum)
-                        << " this_follower= " << this_follower
-                        << " other_follower= " << other_follower << std::endl;
-            node->relion_MPI_Send(MULTIDIM_ARRAY(Msum), MULTIDIM_SIZE(Msum),
-                                  MY_MPI_DOUBLE, other_follower, MPITAG_PACK,
-                                  MPI_COMM_WORLD);
-          } else if (node->rank == other_follower) {
-            node->relion_MPI_Recv(MULTIDIM_ARRAY(Msum), MULTIDIM_SIZE(Msum),
-                                  MY_MPI_DOUBLE, this_follower, MPITAG_PACK,
-                                  MPI_COMM_WORLD, status);
-            DEBUG_PRINT << " AA RECV node->rank= " << node->rank
-                        << " MULTIDIM_SIZE(Msum)= " << MULTIDIM_SIZE(Msum)
-                        << " this_follower= " << this_follower
-                        << " other_follower= " << other_follower << std::endl;
-            // Add my own Mpack to send onwards in the next step
-            Msum += Mpack;
-          }
-        } else {
-          // Now this_follower has reached the last follower, which passes the
-          // final Msum to the first one (i.e. first_follower)
-          if (node->rank == this_follower) {
-            DEBUG_PRINT << " BB SEND node->rank= " << node->rank
-                        << " MULTIDIM_SIZE(Msum)= " << MULTIDIM_SIZE(Msum)
-                        << " this_follower= " << this_follower
-                        << " first_follower= " << first_follower;
-            node->relion_MPI_Send(MULTIDIM_ARRAY(Msum), MULTIDIM_SIZE(Msum),
-                                  MY_MPI_DOUBLE, first_follower, MPITAG_PACK,
-                                  MPI_COMM_WORLD);
-          } else if (node->rank == first_follower) {
-            node->relion_MPI_Recv(MULTIDIM_ARRAY(Msum), MULTIDIM_SIZE(Msum),
-                                  MY_MPI_DOUBLE, this_follower, MPITAG_PACK,
-                                  MPI_COMM_WORLD, status);
-            DEBUG_PRINT << " BB RECV node->rank= " << node->rank
-                        << " MULTIDIM_SIZE(Msum)= " << MULTIDIM_SIZE(Msum)
-                        << " this_follower= " << this_follower
-                        << " first_follower= " << first_follower << std::endl;
-          }
-        }
-      } // end for this_follower
-
-      // Now loop through all followers again to pass around the Msum
-      for (int this_follower = 1; this_follower < node->size; this_follower++) {
-        // Find out who is the next follower in this subset
-        int other_follower = this_follower + nr_halfsets;
-
-        // Do not send to the last follower, because it already had its Msum
-        // from the cycle above, therefore subtract nr_halfsets from node->size
-        if (other_follower < node->size - nr_halfsets) {
-          if (node->rank == this_follower) {
-            DEBUG_PRINT << " CC SEND node->rank= " << node->rank
-                        << " MULTIDIM_SIZE(Msum)= " << MULTIDIM_SIZE(Msum)
-                        << " this_follower= " << this_follower
-                        << " other_follower= " << other_follower << std::endl;
-            node->relion_MPI_Send(MULTIDIM_ARRAY(Msum), MULTIDIM_SIZE(Msum),
-                                  MY_MPI_DOUBLE, other_follower, MPITAG_PACK,
-                                  MPI_COMM_WORLD);
-          } else if (node->rank == other_follower) {
-            node->relion_MPI_Recv(MULTIDIM_ARRAY(Msum), MULTIDIM_SIZE(Msum),
-                                  MY_MPI_DOUBLE, this_follower, MPITAG_PACK,
-                                  MPI_COMM_WORLD, status);
-            DEBUG_PRINT << " CC RECV node->rank= " << node->rank
-                        << " MULTIDIM_SIZE(Msum)= " << MULTIDIM_SIZE(Msum)
-                        << " this_follower= " << this_follower
-                        << " other_follower= " << other_follower << std::endl;
-          }
-        }
-      } // end for this_follower
-
-      // Finally all followers unpack Msum into their wsum_model
-      if (!node->isLeader()) {
-        // Subtract 1 from piece because it was incremented already...
-        wsum_model.unpack(Msum, piece - 1);
-      }
-
-    } // end for piece
-
-    MPI_Barrier(MPI_COMM_WORLD);
-#endif
-  }
+  if ((node->size - 1) / nr_halfsets > 1)
+    combineAllWeightedSumsImpl();
 
   TIMER_TOC(TIMING_MPICOMBINENETW);
 }
@@ -1985,102 +2202,7 @@ void MlOptimiserMpi::combineWeightedSumsTwoRandomHalves() {
                  "cannot combineWeightedSumsTwoRandomHalves if you have not "
                  "split random halves");
 
-  MultidimArray<RFLOAT> Mpack, Msum;
-  MPI_Status status;
-
-#ifdef USE_MPI_COLLECTIVE
-  // The leader does not have a wsum_model!
-  if (!node->isLeader()) {
-    if (node->rank == 1) {
-      if (verb > 0)
-        std::cout << " Combining two random halves ..." << std::endl;
-      wsum_model.pack(Mpack);
-      Msum.resize(wsum_model.getPackSize());
-      node->relion_MPI_Recv(MULTIDIM_ARRAY(Msum), MULTIDIM_SIZE(Msum),
-                            MY_MPI_DOUBLE, 2, MPITAG_PACK, MPI_COMM_WORLD,
-                            status);
-      Mpack += Msum;
-      Msum.clear();
-    } else if (node->rank == 2) {
-      wsum_model.pack(Mpack);
-      node->relion_MPI_Send(MULTIDIM_ARRAY(Mpack), MULTIDIM_SIZE(Mpack),
-                            MY_MPI_DOUBLE, 1, MPITAG_PACK, MPI_COMM_WORLD);
-    } else
-      Mpack.resize(wsum_model.getPackSize());
-
-    // rank one sends Mpack to everyone else
-    node->relion_MPI_Bcast(MULTIDIM_ARRAY(Mpack), MULTIDIM_SIZE(Mpack),
-                           MY_MPI_DOUBLE, 0, node->followerC);
-
-    // Everyone unpacks the new Mpack
-    wsum_model.unpack(Mpack);
-  }
-#else
-  int piece = 0;
-  int nr_pieces = 1;
-  long int pack_size;
-  while (piece < nr_pieces) {
-    // All nodes except those who will reset nr_pieces will pass while next time
-    nr_pieces = 0;
-
-    if (node->rank == 2) {
-      wsum_model.pack(Mpack, piece, nr_pieces,
-                      false); // do not clear the model!
-      node->relion_MPI_Send(MULTIDIM_ARRAY(Mpack), MULTIDIM_SIZE(Mpack),
-                            MY_MPI_DOUBLE, 1, MPITAG_PACK, MPI_COMM_WORLD);
-      Mpack.clear();
-    } else if (node->rank == 1) {
-      if (verb > 0)
-        std::cout << " Combining two random halves ..." << std::endl;
-      wsum_model.pack(Mpack, piece, nr_pieces);
-      Msum.initZeros(Mpack);
-      node->relion_MPI_Recv(MULTIDIM_ARRAY(Msum), MULTIDIM_SIZE(Msum),
-                            MY_MPI_DOUBLE, 2, MPITAG_PACK, MPI_COMM_WORLD,
-                            status);
-      Msum += Mpack;
-      // Unpack the sum (subtract 1 from piece because it was incremented
-      // already...)
-      wsum_model.unpack(Msum, piece - 1);
-      Msum.clear();
-      Mpack.clear();
-    }
-  }
-
-  // Now follower 1 has the sum of the two halves
-  MPI_Barrier(MPI_COMM_WORLD);
-
-  // Bcast to everyone
-  piece = 0;
-  nr_pieces = 1;
-  while (piece < nr_pieces) {
-
-    // All nodes except those who will reset nr_pieces will pass while next time
-    nr_pieces = 0;
-
-    // The leader does not have a wsum_model!
-    if (!node->isLeader()) {
-      // Let's have everyone repack their Mpack, so we know the size etc
-      wsum_model.pack(Mpack, piece, nr_pieces);
-
-      // rank one sends Mpack to everyone else
-      if (node->rank == 1) {
-        for (int other_follower = 2; other_follower < node->size;
-             other_follower++)
-          node->relion_MPI_Send(MULTIDIM_ARRAY(Mpack), MULTIDIM_SIZE(Mpack),
-                                MY_MPI_DOUBLE, other_follower, MPITAG_PACK,
-                                MPI_COMM_WORLD);
-      } else {
-        node->relion_MPI_Recv(MULTIDIM_ARRAY(Mpack), MULTIDIM_SIZE(Mpack),
-                              MY_MPI_DOUBLE, 1, MPITAG_PACK, MPI_COMM_WORLD,
-                              status);
-      }
-
-      // Everyone unpacks the new Mpack
-      wsum_model.unpack(Mpack, piece - 1);
-      Mpack.clear();
-    }
-  }
-#endif
+  combineWeightedSumsTwoHalvesImpl();
 }
 
 void MlOptimiserMpi::maximization() {
@@ -2435,148 +2557,7 @@ void MlOptimiserMpi::maximization() {
 
       if (do_split_random_halves) {
         if (!do_join_random_halves) {
-#ifdef USE_MPI_COLLECTIVE
-          if (!node->isLeader()) {
-            // first pass halfset1, second pass halfset2
-            int reconstruct_rank = 2 * (ith_recons % ((node->size - 1) / 2)) +
-                                   node->myRandomSubset();
-
-            // This is MPI rank in splitC communicator(split random halves run)
-            int split_rank = node->getSplitRank(reconstruct_rank);
-
-            node->relion_MPI_Bcast(MULTIDIM_ARRAY(mymodel.Iref[ith_recons]),
-                                   MULTIDIM_SIZE(mymodel.Iref[ith_recons]),
-                                   MY_MPI_DOUBLE, split_rank, node->splitC);
-            if (do_grad) {
-              node->relion_MPI_Bcast(MULTIDIM_ARRAY(mymodel.Igrad1[ith_recons]),
-                                     MULTIDIM_SIZE(mymodel.Igrad1[ith_recons]),
-                                     MY_MPI_DOUBLE, split_rank, node->splitC);
-              node->relion_MPI_Bcast(MULTIDIM_ARRAY(mymodel.Igrad2[ith_recons]),
-                                     MULTIDIM_SIZE(mymodel.Igrad2[ith_recons]),
-                                     MY_MPI_DOUBLE, split_rank, node->splitC);
-            }
-            node->relion_MPI_Bcast(
-                MULTIDIM_ARRAY(mymodel.data_vs_prior_class[ith_recons]),
-                MULTIDIM_SIZE(mymodel.data_vs_prior_class[ith_recons]),
-                MY_MPI_DOUBLE, split_rank, node->splitC);
-            node->relion_MPI_Bcast(
-                MULTIDIM_ARRAY(mymodel.fourier_coverage_class[ith_recons]),
-                MULTIDIM_SIZE(mymodel.fourier_coverage_class[ith_recons]),
-                MY_MPI_DOUBLE, split_rank, node->splitC);
-            node->relion_MPI_Bcast(
-                MULTIDIM_ARRAY(mymodel.sigma2_class[ith_recons]),
-                MULTIDIM_SIZE(mymodel.sigma2_class[ith_recons]), MY_MPI_DOUBLE,
-                split_rank, node->splitC);
-            //						node->relion_MPI_Bcast(MULTIDIM_ARRAY(mymodel.fsc_halves_class[ibody]),
-            // MULTIDIM_SIZE(mymodel.fsc_halves_class[ibody]), MY_MPI_DOUBLE,
-            // split_rank, node->splitC);
-          }
-#else
-          MPI_Status status;
-          // Make sure I am sending from the rank where the reconstruction was
-          // done (see above) to all other followers of this subset Loop twice
-          // through this, as each class was reconstructed by two different
-          // followers!!
-          int nr_halfsets = 2;
-          for (int ihalfset = 1; ihalfset <= nr_halfsets; ihalfset++) {
-            if (node->myRandomSubset() == ihalfset) {
-              int reconstruct_rank =
-                  2 * (ith_recons % ((node->size - 1) / 2)) +
-                  ihalfset; // first pass halfset1, second pass halfset2
-              int my_first_recv = node->myRandomSubset();
-
-              for (int recv_node = my_first_recv; recv_node < node->size;
-                   recv_node += nr_halfsets) {
-                if (node->rank == reconstruct_rank && recv_node != node->rank) {
-                  DEBUG_PRINT << "ihalfset= " << ihalfset
-                              << " Sending iclass=" << iclass
-                              << " Sending ibody=" << ibody << " from node "
-                              << reconstruct_rank << " to node " << recv_node
-                              << std::endl;
-                  node->relion_MPI_Send(
-                      MULTIDIM_ARRAY(mymodel.Iref[ith_recons]),
-                      MULTIDIM_SIZE(mymodel.Iref[ith_recons]), MY_MPI_DOUBLE,
-                      recv_node, MPITAG_IMAGE, MPI_COMM_WORLD);
-
-                  if (do_grad) {
-                    node->relion_MPI_Send(
-                        MULTIDIM_ARRAY(mymodel.Igrad1[ith_recons]),
-                        MULTIDIM_SIZE(mymodel.Igrad1[ith_recons]),
-                        MY_MPI_DOUBLE, recv_node, MPITAG_IMAGE, MPI_COMM_WORLD);
-                    node->relion_MPI_Send(
-                        MULTIDIM_ARRAY(mymodel.Igrad2[ith_recons]),
-                        MULTIDIM_SIZE(mymodel.Igrad2[ith_recons]),
-                        MY_MPI_DOUBLE, recv_node, MPITAG_IMAGE, MPI_COMM_WORLD);
-                  }
-
-                  node->relion_MPI_Send(
-                      MULTIDIM_ARRAY(mymodel.data_vs_prior_class[ith_recons]),
-                      MULTIDIM_SIZE(mymodel.data_vs_prior_class[ith_recons]),
-                      MY_MPI_DOUBLE, recv_node, MPITAG_METADATA,
-                      MPI_COMM_WORLD);
-                  node->relion_MPI_Send(
-                      MULTIDIM_ARRAY(
-                          mymodel.fourier_coverage_class[ith_recons]),
-                      MULTIDIM_SIZE(mymodel.fourier_coverage_class[ith_recons]),
-                      MY_MPI_DOUBLE, recv_node, MPITAG_METADATA,
-                      MPI_COMM_WORLD);
-                  node->relion_MPI_Send(
-                      MULTIDIM_ARRAY(mymodel.sigma2_class[ith_recons]),
-                      MULTIDIM_SIZE(mymodel.sigma2_class[ith_recons]),
-                      MY_MPI_DOUBLE, recv_node, MPITAG_RFLOAT, MPI_COMM_WORLD);
-                  // node->relion_MPI_Send(MULTIDIM_ARRAY(mymodel.fsc_halves_class[ibody]),
-                  // MULTIDIM_SIZE(mymodel.fsc_halves_class[ibody]),
-                  // MY_MPI_DOUBLE, recv_node, MPITAG_RANDOMSEED,
-                  // MPI_COMM_WORLD);
-                } else if (node->rank != reconstruct_rank &&
-                           node->rank == recv_node) {
-                  node->relion_MPI_Recv(
-                      MULTIDIM_ARRAY(mymodel.Iref[ith_recons]),
-                      MULTIDIM_SIZE(mymodel.Iref[ith_recons]), MY_MPI_DOUBLE,
-                      reconstruct_rank, MPITAG_IMAGE, MPI_COMM_WORLD, status);
-
-                  if (do_grad) {
-                    node->relion_MPI_Recv(
-                        MULTIDIM_ARRAY(mymodel.Igrad1[ith_recons]),
-                        MULTIDIM_SIZE(mymodel.Igrad1[ith_recons]),
-                        MY_MPI_DOUBLE, reconstruct_rank, MPITAG_IMAGE,
-                        MPI_COMM_WORLD, status);
-                    node->relion_MPI_Recv(
-                        MULTIDIM_ARRAY(mymodel.Igrad2[ith_recons]),
-                        MULTIDIM_SIZE(mymodel.Igrad2[ith_recons]),
-                        MY_MPI_DOUBLE, reconstruct_rank, MPITAG_IMAGE,
-                        MPI_COMM_WORLD, status);
-                  }
-
-                  node->relion_MPI_Recv(
-                      MULTIDIM_ARRAY(mymodel.data_vs_prior_class[ith_recons]),
-                      MULTIDIM_SIZE(mymodel.data_vs_prior_class[ith_recons]),
-                      MY_MPI_DOUBLE, reconstruct_rank, MPITAG_METADATA,
-                      MPI_COMM_WORLD, status);
-                  node->relion_MPI_Recv(
-                      MULTIDIM_ARRAY(
-                          mymodel.fourier_coverage_class[ith_recons]),
-                      MULTIDIM_SIZE(mymodel.fourier_coverage_class[ith_recons]),
-                      MY_MPI_DOUBLE, reconstruct_rank, MPITAG_METADATA,
-                      MPI_COMM_WORLD, status);
-                  node->relion_MPI_Recv(
-                      MULTIDIM_ARRAY(mymodel.sigma2_class[ith_recons]),
-                      MULTIDIM_SIZE(mymodel.sigma2_class[ith_recons]),
-                      MY_MPI_DOUBLE, reconstruct_rank, MPITAG_RFLOAT,
-                      MPI_COMM_WORLD, status);
-                  // node->relion_MPI_Recv(MULTIDIM_ARRAY(mymodel.fsc_halves_class[ibody]),
-                  // MULTIDIM_SIZE(mymodel.fsc_halves_class[ibody]),
-                  // MY_MPI_DOUBLE, reconstruct_rank, MPITAG_RANDOMSEED,
-                  // MPI_COMM_WORLD, status);
-                  DEBUG_PRINT << "ihalfset= " << ihalfset
-                              << " Received!!!=" << iclass << " ibody=" << ibody
-                              << " from node " << reconstruct_rank
-                              << " at node " << node->rank << std::endl;
-                }
-              }
-            }
-          }
-#endif
+          broadcastSplitHalfReconstruction(ith_recons);
           // No one should continue until we're all here
           MPI_Barrier(MPI_COMM_WORLD);
 

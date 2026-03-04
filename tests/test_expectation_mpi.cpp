@@ -5,22 +5,23 @@
  *   cmake -DRELION_UNIT_TESTS=ON ...
  *   make test_expectation_mpi
  *   mpirun -n 2 ./tests/test_expectation_mpi
+ *   mpirun -n 3 ./tests/test_expectation_mpi   # enables additional tests
  *
  * What is tested:
- *   1. setupAccelerators()          – is a no-op when no GPU/SYCL/ALTCPU backend
- *                                     is compiled/enabled; accDataBundles stays empty.
- *   2. runLeaderExpectationLoop() / – with zero particles the leader immediately
- *      runFollowerExpectationLoop()   signals "done" to every follower; both sides
- *                                     complete without deadlock.
- *   3. setupAccelerators()          – accOptimisers also stays empty for the plain
- *                                     CPU backend.
- *   4. setupAccelerators()          – leader keeps accBackend == nullptr; each
- *                                     follower gets a non-null backend.
- *   5. makeAccBackend factory       – returns a non-null PlainCpuBackend when all
- *                                     backend flags are false.
- *   6. PlainCpuBackend methods      – createBundles, createOptimisers, and teardown
- *                                     are all no-ops: they leave accDataBundles and
- *                                     accOptimisers empty.
+ *   1. setupAccelerators()                    – no-op when no GPU/SYCL/ALTCPU backend.
+ *   2. runLeaderExpectationLoop() /
+ *      runFollowerExpectationLoop()           – zero-particle handshake completes.
+ *   3. setupAccelerators()                    – accOptimisers stays empty (CPU build).
+ *   4. setupAccelerators()                    – leader has null backend; followers non-null.
+ *   5. makeAccBackend factory                 – non-null fallback for all-false flags.
+ *   6. PlainCpuBackend methods                – createBundles/createOptimisers/teardown
+ *                                               are all no-ops.
+ *   7. broadcastRandomSeed()                  – all ranks agree on a non-negative seed.
+ *   8. broadcastNrParticlesPerGroup(1)        – leader's array reaches odd-rank follower.
+ *   9. broadcastNrParticlesPerGroup(2)        – safe no-op when no even-rank follower.
+ *  10. combineAllWeightedSumsImpl()           – ring-reduce yields correct sum (≥3 ranks).
+ *  11. combineWeightedSumsTwoHalvesImpl()     – cross-half sum is correct (≥3 ranks).
+ *  12. broadcastSplitHalfReconstructionWith3Ranks – completes without deadlock (≥3 ranks).
  *
  * MPI lifecycle:
  *   MpiNode::MpiNode() calls MPI_Init internally, so we construct one shared node
@@ -187,6 +188,176 @@ TEST_F(ExpectationRefactorMpiTest, PlainCpuBackendMethodsAreNoOps)
         << "PlainCpuBackend::teardown must leave accDataBundles empty";
     EXPECT_TRUE(opt.accOptimisers.empty())
         << "PlainCpuBackend::teardown must leave accOptimisers empty";
+}
+
+// ---------------------------------------------------------------------------
+// Test 7: broadcastRandomSeed() delivers a consistent, non-negative seed to
+//         every MPI rank.
+// ---------------------------------------------------------------------------
+TEST_F(ExpectationRefactorMpiTest, BroadcastRandomSeedSetsConsistentSeed)
+{
+    opt.random_seed = -1;
+
+    opt.broadcastRandomSeed();
+
+    // Every rank must now hold a non-negative value.
+    EXPECT_GE(opt.random_seed, 0);
+
+    // All ranks must agree on the same value.  Use Allreduce min/max as a
+    // cross-rank consistency check without needing an extra Bcast.
+    int seed_min = 0, seed_max = 0;
+    MPI_Allreduce(&opt.random_seed, &seed_min, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+    MPI_Allreduce(&opt.random_seed, &seed_max, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+    EXPECT_EQ(seed_min, seed_max)
+        << "All MPI ranks must agree on the same random seed";
+}
+
+// ---------------------------------------------------------------------------
+// Test 8: broadcastNrParticlesPerGroup(1) delivers the leader's array to all
+//         odd-ranked followers (rank 1, 3, 5, …).
+// ---------------------------------------------------------------------------
+TEST_F(ExpectationRefactorMpiTest, BroadcastNrParticlesPerGroupHalfset1)
+{
+    const std::vector<long int> ref = {42L, 7L, 13L};
+
+    if (g_node->isLeader())
+        opt.mymodel.nr_particles_per_group = ref;
+    else
+        opt.mymodel.nr_particles_per_group.assign(ref.size(), 0L);
+
+    opt.broadcastNrParticlesPerGroup(1);
+
+    // Every odd-ranked follower must now hold the leader's values.
+    if (g_node->rank % 2 == 1)
+        EXPECT_EQ(opt.mymodel.nr_particles_per_group, ref)
+            << "Odd follower (rank " << g_node->rank << ") must receive the leader's array";
+}
+
+// ---------------------------------------------------------------------------
+// Test 9: broadcastNrParticlesPerGroup(2) is a silent no-op when no even-rank
+//         follower exists (i.e. exactly 2 MPI ranks: leader + one odd follower).
+// ---------------------------------------------------------------------------
+TEST_F(ExpectationRefactorMpiTest, BroadcastNrParticlesPerGroupHalfset2NoopWith2Ranks)
+{
+    if (g_node->size != 2)
+        GTEST_SKIP() << "This test only applies to exactly 2 MPI ranks";
+
+    const std::vector<long int> initial = {1L, 2L, 3L};
+    opt.mymodel.nr_particles_per_group = initial;
+
+    opt.broadcastNrParticlesPerGroup(2);  // no rank-2 follower → silent no-op
+
+    EXPECT_EQ(opt.mymodel.nr_particles_per_group, initial)
+        << "Array must be unchanged when there is no even-rank follower";
+}
+
+// ---------------------------------------------------------------------------
+// Helper: set up a minimal wsum_model that survives pack()/unpack() round-trips
+// without full model initialisation.
+//
+// BPref[0] is pre-allocated with initialiseDataAndWeight(0) so that pack() and
+// unpack() agree on the same buffer size on every rank.  With padding_factor=0
+// and current_size=0, initialiseDataAndWeight sets pad_size=3 and allocates
+// data/weight arrays of 18 complex / 18 real elements respectively.
+//
+// Packed layout (packed_size == 62):
+//   [0] LL  [1] ave_Pmax  [2] sigma2_offset  [3] avg_norm_correction
+//   [4] sigma2_rot  [5] sigma2_tilt  [6] sigma2_psi  [7] pdf_class[0]
+//   [8..61] BPref[0].data (18 complex * 2 + 18 real = 54 elements)
+// ---------------------------------------------------------------------------
+static void setupMinimalWsumModel(MlOptimiserMpi &opt, RFLOAT ll_value)
+{
+    auto &w = opt.wsum_model;
+    w.nr_classes        = 1;
+    w.nr_bodies         = 0;   // nr_classes * nr_bodies = 0: BPref loops skipped
+    w.nr_groups         = 0;
+    w.nr_optics_groups  = 0;
+    w.nr_directions     = 0;
+    w.ref_dim           = 3;   // avoids the ref_dim==2 priors path
+    w.pdf_class.assign(1, 0.0);
+    w.pdf_direction.resize(1); // one empty inner array → 0 bytes packed
+    w.BPref.resize(1);         // BPref[0] is accessed by getPackSize() even when empty
+    w.BPref[0].ref_dim        = 3;
+    w.BPref[0].padding_factor = 0.0;
+    w.BPref[0].initialiseDataAndWeight(0); // sets pad_size=3, allocs 18 complex+18 real
+    w.BPref[0].data.initZeros();
+    w.BPref[0].weight.initZeros();
+    w.LL = ll_value;
+}
+
+// ---------------------------------------------------------------------------
+// Test 10: combineAllWeightedSumsImpl() with 3 ranks.
+//
+// Leader (rank 0) participates only in the final barrier.  Follower 1 starts
+// with LL=10, follower 2 with LL=20.  After the ring-reduce both must hold
+// the global sum (30).
+//
+// Requires ≥ 3 ranks: with 2 ranks there is only 1 follower per subset so
+// the calling code's guard "(size-1)/nr_halfsets > 1" is false and the impl
+// is never entered.
+// ---------------------------------------------------------------------------
+TEST_F(ExpectationRefactorMpiTest, CombineAllWeightedSumsImplWith3Ranks)
+{
+    if (g_node->size < 3)
+        GTEST_SKIP() << "CombineAllWeightedSumsImpl requires at least 3 MPI ranks";
+
+    const RFLOAT ll1 = 10.0, ll2 = 20.0;
+    if (!g_node->isLeader())
+        setupMinimalWsumModel(opt, g_node->rank == 1 ? ll1 : ll2);
+
+    opt.do_split_random_halves = false;  // nr_halfsets = 1 → all followers one subset
+
+    opt.combineAllWeightedSumsImpl();
+
+    if (!g_node->isLeader())
+        EXPECT_DOUBLE_EQ(opt.wsum_model.LL, ll1 + ll2)
+            << "Every follower must hold the global LL sum after ring-reduce";
+}
+
+// ---------------------------------------------------------------------------
+// Test 11: combineWeightedSumsTwoHalvesImpl() with 3 ranks.
+//
+// Follower 1 (rank 1, halfset 1) starts with LL=10; follower 2 (rank 2,
+// halfset 2) starts with LL=20.  After combining and broadcasting, every
+// follower must hold the sum (30).
+//
+// Requires ≥ 3 ranks so that both rank 1 and rank 2 exist.
+// ---------------------------------------------------------------------------
+TEST_F(ExpectationRefactorMpiTest, CombineWeightedSumsTwoHalvesImplWith3Ranks)
+{
+    if (g_node->size < 3)
+        GTEST_SKIP() << "CombineWeightedSumsTwoHalvesImpl requires at least 3 MPI ranks";
+
+    const RFLOAT ll1 = 10.0, ll2 = 20.0;
+    if (!g_node->isLeader())
+        setupMinimalWsumModel(opt, g_node->rank == 1 ? ll1 : ll2);
+
+    opt.combineWeightedSumsTwoHalvesImpl();
+
+    if (!g_node->isLeader())
+        EXPECT_DOUBLE_EQ(opt.wsum_model.LL, ll1 + ll2)
+            << "Every follower must hold the cross-half LL sum after combining";
+}
+
+// ---------------------------------------------------------------------------
+// Test 12: broadcastSplitHalfReconstruction(0) with 3 ranks.
+//
+// With only one follower per subset there are no cross-subset receivers, so
+// the function is a send/recv-free no-op.  The meaningful assertion is that
+// all ranks reach the post-call barrier without deadlocking.
+// ---------------------------------------------------------------------------
+TEST_F(ExpectationRefactorMpiTest, BroadcastSplitHalfReconstructionWith3Ranks)
+{
+    if (g_node->size < 3)
+        GTEST_SKIP() << "BroadcastSplitHalfReconstruction requires at least 3 MPI ranks";
+
+    opt.do_grad = false;  // suppress Igrad1/Igrad2 accesses
+
+    opt.broadcastSplitHalfReconstruction(/*ith_recons=*/0);
+
+    // All ranks reaching this barrier without hanging is the real assertion.
+    MPI_Barrier(MPI_COMM_WORLD);
+    SUCCEED();
 }
 
 // ---------------------------------------------------------------------------
