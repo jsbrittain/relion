@@ -18,8 +18,8 @@
  * author citations must be preserved.
  ***************************************************************************/
 #include "src/ml_optimiser_mpi.h"
-#include "src/ml_optimiser.h"
 #include "src/acc/acc_backend_factory.h"
+#include "src/ml_optimiser.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -30,7 +30,8 @@
 #ifdef TIMING
 int TIMING_MPIPACK = -1, TIMING_MPIWAIT = -1, TIMING_MPICOMBINEDISC = -1,
     TIMING_MPICOMBINENETW = -1, TIMING_MPISLAVEWORK = -1;
-int TIMING_MPISLAVEWAIT1 = -1, TIMING_MPISLAVEWAIT2 = -1, TIMING_MPISLAVEWAIT3 = -1;
+int TIMING_MPISLAVEWAIT1 = -1, TIMING_MPISLAVEWAIT2 = -1,
+    TIMING_MPISLAVEWAIT3 = -1;
 #define TIMER_TIC(label) (timer.tic(label))
 #define TIMER_TOC(label) (timer.toc(label))
 #else
@@ -38,15 +39,19 @@ int TIMING_MPISLAVEWAIT1 = -1, TIMING_MPISLAVEWAIT2 = -1, TIMING_MPISLAVEWAIT3 =
 #define TIMER_TOC(label)
 #endif
 
-MlOptimiserMpi::~MlOptimiserMpi()
-{
-    delete node;
-}
+#ifdef DEBUG
+#define DEBUG_PRINT std::cerr
+#else // Absorb debug print when not debugging
+#define DEBUG_PRINT                                                            \
+  if (true) {                                                                  \
+  } else                                                                       \
+    std::cerr
+#endif
+
+MlOptimiserMpi::~MlOptimiserMpi() { delete node; }
 
 void MlOptimiserMpi::read(int argc, char **argv) {
-#ifdef DEBUG
-  std::cerr << "MlOptimiserMpi::read Entering " << std::endl;
-#endif
+  DEBUG_PRINT << "MlOptimiserMpi::read Entering " << std::endl;
 
   // Define a new MpiNode
   node = new MpiNode(argc, argv);
@@ -81,17 +86,13 @@ void MlOptimiserMpi::read(int argc, char **argv) {
   //	verb = 1;
   // Possibly also read parallelisation-dependent variables here
 
-#ifdef DEBUG
-  std::cerr << "MlOptimiserMpi::read done" << std::endl;
-#endif
+  DEBUG_PRINT << "MlOptimiserMpi::read done" << std::endl;
 }
 void MlOptimiserMpi::finalise() { delete node; }
 
 void MlOptimiserMpi::initialise() {
 
-#ifdef DEBUG
-  std::cerr << "MlOptimiserMpi::initialise Entering" << std::endl;
-#endif
+  DEBUG_PRINT << "MlOptimiserMpi::initialise Entering" << std::endl;
 
   // Print information about MPI nodes:
   printMpiNodesMachineNames(*node, nr_threads);
@@ -123,7 +124,8 @@ void MlOptimiserMpi::initialise() {
     std::vector<int> ranksOnHost;
     std::vector<int> devicesOnHost;
 
-    // ------------------------------ FIGURE OUT GLOBAL DEVICE MAP----------------------
+    // ------------------------------ FIGURE OUT GLOBAL DEVICE
+    // MAP----------------------
     if (!node->isLeader()) {
       accGPUDeviceProp deviceProp;
       int compatibleDevices(0);
@@ -203,7 +205,8 @@ void MlOptimiserMpi::initialise() {
 
     MPI_Barrier(MPI_COMM_WORLD);
 
-    // ------------------------------ SET DEVICE INDICES BASED ON HOST DEVICE-COUNTS ---
+    // ------------------------------ SET DEVICE INDICES BASED ON HOST
+    // DEVICE-COUNTS ---
     if (node->isLeader()) {
       for (int i = 0; i < uniqueHosts.size(); i++) {
         std::cout << " uniqueHost " << uniqueHosts[i] << " has "
@@ -333,7 +336,7 @@ void MlOptimiserMpi::initialise() {
         didS = didSs.str();
 
         //				std::cout << "SENDING: " << didS <<
-        //std::endl;
+        // std::endl;
 
         strcpy(buffer, didS.c_str());
         node->relion_MPI_Send(buffer, didS.length() + 1, MPI_CHAR, 0,
@@ -344,7 +347,7 @@ void MlOptimiserMpi::initialise() {
         node->relion_MPI_Recv(&gpuDeviceShares[i], 1, MPI_INT, 0, MPITAG_INT,
                               MPI_COMM_WORLD, status);
         //	        	std::cout << "Received: " <<
-        //bundle->rank_shared_count << std::endl;
+        // bundle->rank_shared_count << std::endl;
       }
     } else {
       int devCount;
@@ -813,9 +816,7 @@ will still yield good performance and possibly a more stable execution. \n"
                        DO_WRITE_MODEL, node->rank);
   }
 
-#ifdef DEBUG
-  std::cerr << "MlOptimiserMpi::initialise Done" << std::endl;
-#endif
+  DEBUG_PRINT << "MlOptimiserMpi::initialise Done" << std::endl;
 }
 
 void MlOptimiserMpi::initialiseWorkLoad() {
@@ -1203,9 +1204,11 @@ void MlOptimiserMpi::runLeaderExpectationLoop(MultidimArray<long int> &job_buf,
       }
 
       // std::cerr << "subset= " << subset << " half-set= " << random_halfset
-      //		<< " nr_subset_particles_done= " << nr_subset_particles_done
+      //		<< " nr_subset_particles_done= " <<
+      //nr_subset_particles_done
       //		<< " nr_particles_todo=" << nr_particles_todo <<
-      //		" JOB_FIRST= " << job_first << " JOB_LAST= " << job_last << std::endl;
+      //		" JOB_FIRST= " << job_first << " JOB_LAST= " << job_last
+      //<< std::endl;
 
 #ifdef DEBUG_MPIEXP2
       std::cerr << " MASTER SENDING to follower= " << this_follower
@@ -1311,10 +1314,8 @@ void MlOptimiserMpi::runFollowerExpectationLoop(
 
       // Check whether I am done
       if (job_nimg <= 0) {
-#ifdef DEBUG
-        std::cerr << " follower " << node->rank << " has finished expectation.."
-                  << std::endl;
-#endif
+        DEBUG_PRINT << " follower " << node->rank
+                    << " has finished expectation.." << std::endl;
         exp_imagedata.clear();
         exp_metadata.clear();
         break;
@@ -1406,10 +1407,14 @@ void MlOptimiserMpi::runFollowerExpectationLoop(
       }
     }
     //		TODO: define MPI_COMM_SLAVES!!!!
-    //MPI_Barrier(node->MPI_COMM_SLAVES);
+    // MPI_Barrier(node->MPI_COMM_SLAVES);
 
     // Accelerator teardown
-    if (accBackend) { accBackend->teardown(*this); delete accBackend; accBackend = nullptr; }
+    if (accBackend) {
+      accBackend->teardown(*this);
+      delete accBackend;
+      accBackend = nullptr;
+    }
   } catch (RelionError XE) {
     std::cerr << "follower " << node->rank << " encountered error: " << XE;
     MPI_Abort(MPI_COMM_WORLD, RELION_EXIT_FAILURE);
@@ -1419,9 +1424,7 @@ void MlOptimiserMpi::runFollowerExpectationLoop(
 
 void MlOptimiserMpi::expectation() {
   TIMER_TIC(TIMING_EXP_1);
-#ifdef DEBUG
-  std::cerr << "MlOptimiserMpi::expectation: Entering " << std::endl;
-#endif
+  DEBUG_PRINT << "MlOptimiserMpi::expectation: Entering " << std::endl;
 
   int first_follower = 1;
   // Use maximum of 100 particles for 3D and 10 particles for 2D estimations
@@ -1655,9 +1658,7 @@ void MlOptimiserMpi::expectation() {
       mymodel.PPref[iclass].initialiseData(0);
   }
 
-#ifdef DEBUG
-  std::cerr << "MlOptimiserMpi::expectation: done" << std::endl;
-#endif
+  DEBUG_PRINT << "MlOptimiserMpi::expectation: done" << std::endl;
 }
 
 void MlOptimiserMpi::combineAllWeightedSumsViaFile() {
@@ -1776,9 +1777,7 @@ void MlOptimiserMpi::combineAllWeightedSums() {
   // When splitting the data into two random halves, perform two passes: one for
   // each subset
   int nr_halfsets = (do_split_random_halves) ? 2 : 1;
-#ifdef DEBUG
-  std::cerr << " starting combineAllWeightedSums..." << std::endl;
-#endif
+  DEBUG_PRINT << " starting combineAllWeightedSums..." << std::endl;
   // Only combine weighted sums if there are more than one followers per subset!
   if ((node->size - 1) / nr_halfsets > 1) {
 #ifdef USE_MPI_COLLECTIVE
@@ -1795,11 +1794,10 @@ void MlOptimiserMpi::combineAllWeightedSums() {
         node->relion_MPI_Allreduce(MULTIDIM_ARRAY(Mpack), MULTIDIM_ARRAY(Msum),
                                    MULTIDIM_SIZE(Mpack), MY_MPI_DOUBLE, MPI_SUM,
                                    node->followerC);
-#ifdef DEBUG
-      if (node->rank == 1)
-        std::cerr << " MPI_Allreduce MULTIDIM_SIZE(Mpack)= "
-                  << MULTIDIM_SIZE(Mpack) << std::endl;
-#endif
+      if (node->rank == 1) {
+        DEBUG_PRINT << " MPI_Allreduce MULTIDIM_SIZE(Mpack)= "
+                    << MULTIDIM_SIZE(Mpack) << std::endl;
+      }
 
       Mpack.clear();
       wsum_model.unpack(Msum);
@@ -1840,12 +1838,10 @@ void MlOptimiserMpi::combineAllWeightedSums() {
 
         if (other_follower < node->size) {
           if (node->rank == this_follower) {
-#ifdef DEBUG
-            std::cerr << " AA SEND node->rank= " << node->rank
-                      << " MULTIDIM_SIZE(Msum)= " << MULTIDIM_SIZE(Msum)
-                      << " this_follower= " << this_follower
-                      << " other_follower= " << other_follower << std::endl;
-#endif
+            DEBUG_PRINT << " AA SEND node->rank= " << node->rank
+                        << " MULTIDIM_SIZE(Msum)= " << MULTIDIM_SIZE(Msum)
+                        << " this_follower= " << this_follower
+                        << " other_follower= " << other_follower << std::endl;
             node->relion_MPI_Send(MULTIDIM_ARRAY(Msum), MULTIDIM_SIZE(Msum),
                                   MY_MPI_DOUBLE, other_follower, MPITAG_PACK,
                                   MPI_COMM_WORLD);
@@ -1853,12 +1849,10 @@ void MlOptimiserMpi::combineAllWeightedSums() {
             node->relion_MPI_Recv(MULTIDIM_ARRAY(Msum), MULTIDIM_SIZE(Msum),
                                   MY_MPI_DOUBLE, this_follower, MPITAG_PACK,
                                   MPI_COMM_WORLD, status);
-#ifdef DEBUG
-            std::cerr << " AA RECV node->rank= " << node->rank
-                      << " MULTIDIM_SIZE(Msum)= " << MULTIDIM_SIZE(Msum)
-                      << " this_follower= " << this_follower
-                      << " other_follower= " << other_follower << std::endl;
-#endif
+            DEBUG_PRINT << " AA RECV node->rank= " << node->rank
+                        << " MULTIDIM_SIZE(Msum)= " << MULTIDIM_SIZE(Msum)
+                        << " this_follower= " << this_follower
+                        << " other_follower= " << other_follower << std::endl;
             // Add my own Mpack to send onwards in the next step
             Msum += Mpack;
           }
@@ -1866,12 +1860,10 @@ void MlOptimiserMpi::combineAllWeightedSums() {
           // Now this_follower has reached the last follower, which passes the
           // final Msum to the first one (i.e. first_follower)
           if (node->rank == this_follower) {
-#ifdef DEBUG
-            std::cerr << " BB SEND node->rank= " << node->rank
-                      << " MULTIDIM_SIZE(Msum)= " << MULTIDIM_SIZE(Msum)
-                      << " this_follower= " << this_follower
-                      << " first_follower= " << first_follower << std::endl;
-#endif
+            DEBUG_PRINT << " BB SEND node->rank= " << node->rank
+                        << " MULTIDIM_SIZE(Msum)= " << MULTIDIM_SIZE(Msum)
+                        << " this_follower= " << this_follower
+                        << " first_follower= " << first_follower;
             node->relion_MPI_Send(MULTIDIM_ARRAY(Msum), MULTIDIM_SIZE(Msum),
                                   MY_MPI_DOUBLE, first_follower, MPITAG_PACK,
                                   MPI_COMM_WORLD);
@@ -1879,12 +1871,10 @@ void MlOptimiserMpi::combineAllWeightedSums() {
             node->relion_MPI_Recv(MULTIDIM_ARRAY(Msum), MULTIDIM_SIZE(Msum),
                                   MY_MPI_DOUBLE, this_follower, MPITAG_PACK,
                                   MPI_COMM_WORLD, status);
-#ifdef DEBUG
-            std::cerr << " BB RECV node->rank= " << node->rank
-                      << " MULTIDIM_SIZE(Msum)= " << MULTIDIM_SIZE(Msum)
-                      << " this_follower= " << this_follower
-                      << " first_follower= " << first_follower << std::endl;
-#endif
+            DEBUG_PRINT << " BB RECV node->rank= " << node->rank
+                        << " MULTIDIM_SIZE(Msum)= " << MULTIDIM_SIZE(Msum)
+                        << " this_follower= " << this_follower
+                        << " first_follower= " << first_follower << std::endl;
           }
         }
       } // end for this_follower
@@ -1898,12 +1888,10 @@ void MlOptimiserMpi::combineAllWeightedSums() {
         // from the cycle above, therefore subtract nr_halfsets from node->size
         if (other_follower < node->size - nr_halfsets) {
           if (node->rank == this_follower) {
-#ifdef DEBUG
-            std::cerr << " CC SEND node->rank= " << node->rank
-                      << " MULTIDIM_SIZE(Msum)= " << MULTIDIM_SIZE(Msum)
-                      << " this_follower= " << this_follower
-                      << " other_follower= " << other_follower << std::endl;
-#endif
+            DEBUG_PRINT << " CC SEND node->rank= " << node->rank
+                        << " MULTIDIM_SIZE(Msum)= " << MULTIDIM_SIZE(Msum)
+                        << " this_follower= " << this_follower
+                        << " other_follower= " << other_follower << std::endl;
             node->relion_MPI_Send(MULTIDIM_ARRAY(Msum), MULTIDIM_SIZE(Msum),
                                   MY_MPI_DOUBLE, other_follower, MPITAG_PACK,
                                   MPI_COMM_WORLD);
@@ -1911,12 +1899,10 @@ void MlOptimiserMpi::combineAllWeightedSums() {
             node->relion_MPI_Recv(MULTIDIM_ARRAY(Msum), MULTIDIM_SIZE(Msum),
                                   MY_MPI_DOUBLE, this_follower, MPITAG_PACK,
                                   MPI_COMM_WORLD, status);
-#ifdef DEBUG
-            std::cerr << " CC RECV node->rank= " << node->rank
-                      << " MULTIDIM_SIZE(Msum)= " << MULTIDIM_SIZE(Msum)
-                      << " this_follower= " << this_follower
-                      << " other_follower= " << other_follower << std::endl;
-#endif
+            DEBUG_PRINT << " CC RECV node->rank= " << node->rank
+                        << " MULTIDIM_SIZE(Msum)= " << MULTIDIM_SIZE(Msum)
+                        << " this_follower= " << this_follower
+                        << " other_follower= " << other_follower << std::endl;
           }
         }
       } // end for this_follower
@@ -2098,9 +2084,7 @@ void MlOptimiserMpi::combineWeightedSumsTwoRandomHalves() {
 }
 
 void MlOptimiserMpi::maximization() {
-#ifdef DEBUG
-  std::cerr << "MlOptimiserMpi::maximization: Entering " << std::endl;
-#endif
+  DEBUG_PRINT << "MlOptimiserMpi::maximization: Entering " << std::endl;
 
   TIMER_TIC(TIMING_RECONS);
 
@@ -2431,15 +2415,11 @@ void MlOptimiserMpi::maximization() {
     } // end for iclass
   } // end for ibody
 
-#ifdef DEBUG
-  std::cerr << "rank= " << node->rank
-            << " has reached barrier of reconstruction" << std::endl;
-#endif
+  DEBUG_PRINT << "rank= " << node->rank
+              << " has reached barrier of reconstruction" << std::endl;
   MPI_Barrier(MPI_COMM_WORLD);
 
-#ifdef DEBUG
-  std::cerr << "All classes have been reconstructed" << std::endl;
-#endif
+  DEBUG_PRINT << "All classes have been reconstructed" << std::endl;
   TIMER_TIC(RCT_2);
   // Once reconstructed, broadcast new models to all other nodes
   // This cannot be done in the reconstruction loop itself because then it will
@@ -2488,8 +2468,8 @@ void MlOptimiserMpi::maximization() {
                 MULTIDIM_SIZE(mymodel.sigma2_class[ith_recons]), MY_MPI_DOUBLE,
                 split_rank, node->splitC);
             //						node->relion_MPI_Bcast(MULTIDIM_ARRAY(mymodel.fsc_halves_class[ibody]),
-            //MULTIDIM_SIZE(mymodel.fsc_halves_class[ibody]), MY_MPI_DOUBLE,
-            //split_rank, node->splitC);
+            // MULTIDIM_SIZE(mymodel.fsc_halves_class[ibody]), MY_MPI_DOUBLE,
+            // split_rank, node->splitC);
           }
 #else
           MPI_Status status;
@@ -2508,13 +2488,11 @@ void MlOptimiserMpi::maximization() {
               for (int recv_node = my_first_recv; recv_node < node->size;
                    recv_node += nr_halfsets) {
                 if (node->rank == reconstruct_rank && recv_node != node->rank) {
-#ifdef DEBUG
-                  std::cerr << "ihalfset= " << ihalfset
-                            << " Sending iclass=" << iclass
-                            << " Sending ibody=" << ibody << " from node "
-                            << reconstruct_rank << " to node " << recv_node
-                            << std::endl;
-#endif
+                  DEBUG_PRINT << "ihalfset= " << ihalfset
+                              << " Sending iclass=" << iclass
+                              << " Sending ibody=" << ibody << " from node "
+                              << reconstruct_rank << " to node " << recv_node
+                              << std::endl;
                   node->relion_MPI_Send(
                       MULTIDIM_ARRAY(mymodel.Iref[ith_recons]),
                       MULTIDIM_SIZE(mymodel.Iref[ith_recons]), MY_MPI_DOUBLE,
@@ -2590,12 +2568,10 @@ void MlOptimiserMpi::maximization() {
                   // MULTIDIM_SIZE(mymodel.fsc_halves_class[ibody]),
                   // MY_MPI_DOUBLE, reconstruct_rank, MPITAG_RANDOMSEED,
                   // MPI_COMM_WORLD, status);
-#ifdef DEBUG
-                  std::cerr << "ihalfset= " << ihalfset
-                            << " Received!!!=" << iclass << " ibody=" << ibody
-                            << " from node " << reconstruct_rank << " at node "
-                            << node->rank << std::endl;
-#endif
+                  DEBUG_PRINT << "ihalfset= " << ihalfset
+                              << " Received!!!=" << iclass << " ibody=" << ibody
+                              << " from node " << reconstruct_rank
+                              << " at node " << node->rank << std::endl;
                 }
               }
             }
@@ -2732,9 +2708,7 @@ void MlOptimiserMpi::maximization() {
     mymodel.helical_twist[0] = (helical_twist_half1 + helical_twist_half2) / 2.;
   }
 
-#ifdef DEBUG
-  std::cerr << "MlOptimiserMpi::maximization: done" << std::endl;
-#endif
+  DEBUG_PRINT << "MlOptimiserMpi::maximization: done" << std::endl;
 }
 
 void MlOptimiserMpi::maximizationSyncGradientParameters() {
@@ -2843,10 +2817,8 @@ void MlOptimiserMpi::maximizationGradientParametersRandomHalves() {
 }
 
 void MlOptimiserMpi::joinTwoHalvesAtLowResolution() {
-#ifdef DEBUG
-  std::cerr << "MlOptimiserMpi::joinTwoHalvesAtLowResolution: Entering "
-            << std::endl;
-#endif
+  DEBUG_PRINT << "MlOptimiserMpi::joinTwoHalvesAtLowResolution: Entering "
+              << std::endl;
 
   if (!do_split_random_halves)
     REPORT_ERROR("BUG: you should not be in "
@@ -2858,22 +2830,18 @@ void MlOptimiserMpi::joinTwoHalvesAtLowResolution() {
   int lowres_r_max = CEIL(mymodel.ori_size * mymodel.pixel_size / myres);
 
   for (int ibody = 0; ibody < mymodel.nr_bodies; ibody++) {
-#ifdef DEBUG
-    std::cerr << " ibody= " << ibody << " node->rank= " << node->rank
-              << " mymodel.keep_fixed_bodies[ibody]= "
-              << mymodel.keep_fixed_bodies[ibody] << std::endl;
-#endif
+    DEBUG_PRINT << " ibody= " << ibody << " node->rank= " << node->rank
+                << " mymodel.keep_fixed_bodies[ibody]= "
+                << mymodel.keep_fixed_bodies[ibody] << std::endl;
 
     if (mymodel.nr_bodies > 1 && mymodel.keep_fixed_bodies[ibody] > 0)
       continue;
 
     int reconstruct_rank1 = 2 * (ibody % ((node->size - 1) / 2)) + 1;
     int reconstruct_rank2 = 2 * (ibody % ((node->size - 1) / 2)) + 2;
-#ifdef DEBUG
-    std::cerr << " ibody= " << ibody << " node->rank= " << node->rank
-              << " reconstruct_rank1= " << reconstruct_rank1
-              << " reconstruct_rank2= " << reconstruct_rank2 << std::endl;
-#endif
+    DEBUG_PRINT << " ibody= " << ibody << " node->rank= " << node->rank
+                << " reconstruct_rank1= " << reconstruct_rank1
+                << " reconstruct_rank2= " << reconstruct_rank2 << std::endl;
 
     if (node->rank == reconstruct_rank1 || node->rank == reconstruct_rank2) {
       MultidimArray<Complex> lowres_data;
@@ -2884,8 +2852,8 @@ void MlOptimiserMpi::joinTwoHalvesAtLowResolution() {
       if (node->rank == reconstruct_rank2) {
         MPI_Status status;
 
+        DEBUG_PRINT << " RANK2A: node->rank= " << node->rank << std::endl;
 #ifdef DEBUG
-        std::cerr << " RANK2A: node->rank= " << node->rank << std::endl;
         std::cerr << "AAArank=2 lowresdata: ";
         lowres_data.printShape();
 #endif
@@ -2899,8 +2867,8 @@ void MlOptimiserMpi::joinTwoHalvesAtLowResolution() {
                               reconstruct_rank1, MPITAG_RFLOAT, MPI_COMM_WORLD);
 
         // Now the first follower is calculating the average....
+        DEBUG_PRINT << " RANK2B: node->rank= " << node->rank << std::endl;
 #ifdef DEBUG
-        std::cerr << " RANK2B: node->rank= " << node->rank << std::endl;
         std::cerr << "BBBrank=2 lowresdata: ";
         lowres_data.printShape();
 #endif
@@ -2918,9 +2886,7 @@ void MlOptimiserMpi::joinTwoHalvesAtLowResolution() {
 
       } else if (node->rank == reconstruct_rank1) {
 
-#ifdef DEBUG
-        std::cerr << " RANK1A: node->rank= " << node->rank << std::endl;
-#endif
+        DEBUG_PRINT << " RANK1A: node->rank= " << node->rank << std::endl;
         std::cout
             << " Averaging half-reconstructions up to " << myres
             << " Angstrom resolution to prevent diverging orientations ..."
@@ -2984,10 +2950,8 @@ void MlOptimiserMpi::joinTwoHalvesAtLowResolution() {
     }
   }
 
-#ifdef DEBUG
-  std::cerr << "MlOptimiserMpi::joinTwoHalvesAtLowResolution: done"
-            << std::endl;
-#endif
+  DEBUG_PRINT << "MlOptimiserMpi::joinTwoHalvesAtLowResolution: done"
+              << std::endl;
 }
 
 void MlOptimiserMpi::
@@ -3308,9 +3272,7 @@ void MlOptimiserMpi::readTemporaryDataAndWeightArraysAndReconstruct(int iclass,
 }
 
 void MlOptimiserMpi::compareTwoHalves() {
-#ifdef DEBUG
-  std::cerr << "MlOptimiserMpi::compareTwoHalves: Entering " << std::endl;
-#endif
+  DEBUG_PRINT << "MlOptimiserMpi::compareTwoHalves: Entering " << std::endl;
 
   if (!do_split_random_halves)
     REPORT_ERROR("ERROR: you should not be in MlOptimiserMpi::compareTwoHalves "
@@ -3396,9 +3358,7 @@ void MlOptimiserMpi::compareTwoHalves() {
 
   } // end loop over bodies
 
-#ifdef DEBUG
-  std::cerr << "MlOptimiserMpi::compareTwoHalves: done" << std::endl;
-#endif
+  DEBUG_PRINT << "MlOptimiserMpi::compareTwoHalves: done" << std::endl;
 }
 
 void MlOptimiserMpi::calculateExpectedAngularErrors(long int my_first_part_id,
@@ -3741,9 +3701,7 @@ void MlOptimiserMpi::iterate() {
     }
 
     expectation();
-#ifdef DEBUG
-    std::cerr << " finished expectation..." << std::endl;
-#endif
+    DEBUG_PRINT << " finished expectation..." << std::endl;
 
     MPI_Barrier(MPI_COMM_WORLD);
 
@@ -3767,16 +3725,12 @@ void MlOptimiserMpi::iterate() {
     // Leave the option to both for a while. Then, if there are no problems with
     // the system via files keep that one and remove the MPI version from the
     // code
-#ifdef DEBUG
-    std::cerr << " before combineAllWeightedSums..." << std::endl;
-#endif
+    DEBUG_PRINT << " before combineAllWeightedSums..." << std::endl;
     if (combine_weights_thru_disc)
       combineAllWeightedSumsViaFile();
     else
       combineAllWeightedSums();
-#ifdef DEBUG
-    std::cerr << " after combineAllWeightedSums..." << std::endl;
-#endif
+    DEBUG_PRINT << " after combineAllWeightedSums..." << std::endl;
 
     MPI_Barrier(MPI_COMM_WORLD);
 
@@ -3829,9 +3783,7 @@ void MlOptimiserMpi::iterate() {
       if (low_resol_join_halves > 0.)
         joinTwoHalvesAtLowResolution();
 
-#ifdef DEBUG
-      std::cerr << " before compareHalves..." << std::endl;
-#endif
+      DEBUG_PRINT << " before compareHalves..." << std::endl;
       // If doing GD, do an exponenetial averaged FSC
       std::vector<MultidimArray<RFLOAT>> old_fscs(mymodel.nr_bodies);
       if (do_grad)
@@ -3858,9 +3810,7 @@ void MlOptimiserMpi::iterate() {
         reconstructUnregularisedMapAndCalculateSolventCorrectedFSC();
       else
         compareTwoHalves();
-#ifdef DEBUG
-      std::cerr << " after compareHalves..." << std::endl;
-#endif
+      DEBUG_PRINT << " after compareHalves..." << std::endl;
 
       // If doing GD, do an exponenetial averaged FSC
       if (do_grad)

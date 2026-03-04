@@ -52,11 +52,10 @@ public:
 
   int gpuDeviceShareAt(int i) const override { return gpuDeviceShares[i]; }
 
-  std::string accThreadName(int thread_id) const override
-  {
-      std::ostringstream ss;
-      ss << "RRr" << node->rank << "t" << thread_id;
-      return ss.str();
+  std::string accThreadName(int thread_id) const override {
+    std::ostringstream ss;
+    ss << "RRr" << node->rank << "t" << thread_id;
+    return ss.str();
   }
 
   /** Read
