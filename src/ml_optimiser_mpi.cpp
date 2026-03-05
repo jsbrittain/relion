@@ -515,27 +515,26 @@ void MlOptimiserMpi::setupSyclDevices() {
 
         MPI_Probe(follower, MPITAG_IDENTIFIER, MPI_COMM_WORLD, &status);
         MPI_Get_count(&status, MPI_CHAR, &cSize);
-        char *hName = (char *)malloc((cSize + 1) * sizeof(char));
-        MPI_Recv(hName, cSize, MPI_CHAR, follower, MPITAG_IDENTIFIER,
+        std::vector<char> hName(cSize + 1, '\0');
+        MPI_Recv(hName.data(), cSize, MPI_CHAR, follower, MPITAG_IDENTIFIER,
                  MPI_COMM_WORLD, &status);
-        hName[cSize] = '\0';
 
         MPI_Recv(&nHead, 1, MPI_INT, follower, MPITAG_INT + 100, MPI_COMM_WORLD,
                  &status);
         if (nHead == 1) {
           MPI_Recv(&nodeSize, 1, MPI_INT, follower, MPITAG_INT + 200,
                    MPI_COMM_WORLD, &status);
-          std::cout << "Host " << hName << " has " << nodeSize << " rank(s).\n";
+          std::cout << "Host " << hName.data() << " has " << nodeSize << " rank(s).\n";
         }
 
         if (allThreadIDs[follower - 1].size() != nr_threads) {
-          std::cout << " Follower " << follower << " @ " << hName
+          std::cout << " Follower " << follower << " @ " << hName.data()
                     << " will distribute threads over devices: ";
           for (int j = 0; j < allThreadIDs[follower - 1].size(); j++)
             std::cout << " " << allThreadIDs[follower - 1][j];
           std::cout << std::endl;
         } else {
-          std::cout << " Follower " << follower << " @ " << hName
+          std::cout << " Follower " << follower << " @ " << hName.data()
                     << " will use explicit mapping to assign devices: ";
           for (int j = 0; j < allThreadIDs[follower - 1].size(); j++)
             std::cout << " " << allThreadIDs[follower - 1][j];
@@ -557,16 +556,13 @@ void MlOptimiserMpi::setupSyclDevices() {
         for (int j = 0; j < nr_threads; j++) {
           MPI_Probe(follower, MPITAG_IDENTIFIER + 100, MPI_COMM_WORLD, &status);
           MPI_Get_count(&status, MPI_CHAR, &cSize);
-          char *dName = (char *)malloc((cSize + 1) * sizeof(char));
-          MPI_Recv(dName, cSize, MPI_CHAR, follower, MPITAG_IDENTIFIER + 100,
-                   MPI_COMM_WORLD, &status);
-          dName[cSize] = '\0';
+          std::vector<char> dName(cSize + 1, '\0');
+          MPI_Recv(dName.data(), cSize, MPI_CHAR, follower,
+                   MPITAG_IDENTIFIER + 100, MPI_COMM_WORLD, &status);
 
           std::cout << "   Thread " << j << " on follower " << follower
-                    << " mapped to device " << dName << std::endl;
-          free(dName);
+                    << " mapped to device " << dName.data() << std::endl;
         }
-        free(hName);
       }
       std::cout << std::string(80, '*') << std::endl << std::flush;
     } else {
@@ -1695,27 +1691,21 @@ void MlOptimiserMpi::runFollowerExpectationLoop(
         // Receive the image filenames or the exp_imagedata
         if (do_parallel_disc_io) {
           // Resize the exp_fn_img strings
-          char *rec_buf;
-          rec_buf = (char *)malloc(job_len_fn_img);
-          node->relion_MPI_Recv(rec_buf, job_len_fn_img, MPI_CHAR, 0,
+          std::vector<char> rec_buf(job_len_fn_img);
+          node->relion_MPI_Recv(rec_buf.data(), job_len_fn_img, MPI_CHAR, 0,
                                 MPITAG_METADATA, MPI_COMM_WORLD, status);
-          exp_fn_img = rec_buf;
-          free(rec_buf);
+          exp_fn_img = rec_buf.data();
           if (job_len_fn_ctf > 1) {
-            char *rec_buf2;
-            rec_buf2 = (char *)malloc(job_len_fn_ctf);
-            node->relion_MPI_Recv(rec_buf2, job_len_fn_ctf, MPI_CHAR, 0,
+            std::vector<char> rec_buf2(job_len_fn_ctf);
+            node->relion_MPI_Recv(rec_buf2.data(), job_len_fn_ctf, MPI_CHAR, 0,
                                   MPITAG_METADATA, MPI_COMM_WORLD, status);
-            exp_fn_ctf = rec_buf2;
-            free(rec_buf2);
+            exp_fn_ctf = rec_buf2.data();
           }
           if (job_len_fn_rec > 1) {
-            char *rec_buf3;
-            rec_buf3 = (char *)malloc(job_len_fn_rec);
-            node->relion_MPI_Recv(rec_buf3, job_len_fn_rec, MPI_CHAR, 0,
+            std::vector<char> rec_buf3(job_len_fn_rec);
+            node->relion_MPI_Recv(rec_buf3.data(), job_len_fn_rec, MPI_CHAR, 0,
                                   MPITAG_METADATA, MPI_COMM_WORLD, status);
-            exp_fn_recimg = rec_buf3;
-            free(rec_buf3);
+            exp_fn_recimg = rec_buf3.data();
           }
         } else {
           int mysize;
@@ -1844,7 +1834,7 @@ void MlOptimiserMpi::expectation() {
           // Communicating over all followers means we don't have to allocate on
           // the leader.
           node->relion_MPI_Bcast(MULTIDIM_ARRAY(mymodel.PPref[i].data),
-                                 MULTIDIM_SIZE(mymodel.PPref[0].data),
+                                 MULTIDIM_SIZE(mymodel.PPref[i].data),
                                  MY_MPI_COMPLEX, sender, node->followerC);
           // For multibody refinement with overlapping bodies, there may be more
           // PPrefs than bodies!
@@ -3380,12 +3370,10 @@ void MlOptimiserMpi::calculateExpectedAngularErrors(long int my_first_part_id,
     node->relion_MPI_Recv(&length_fn_ctf, 1, MPI_INT, 0, MPITAG_JOB_REQUEST,
                           MPI_COMM_WORLD, status);
     if (length_fn_ctf > 1) {
-      char *rec_buf2;
-      rec_buf2 = (char *)malloc(length_fn_ctf);
-      node->relion_MPI_Recv(rec_buf2, length_fn_ctf, MPI_CHAR, 0,
+      std::vector<char> rec_buf2(length_fn_ctf);
+      node->relion_MPI_Recv(rec_buf2.data(), length_fn_ctf, MPI_CHAR, 0,
                             MPITAG_METADATA, MPI_COMM_WORLD, status);
-      exp_fn_ctf = rec_buf2;
-      free(rec_buf2);
+      exp_fn_ctf = rec_buf2.data();
     }
     MlOptimiser::calculateExpectedAngularErrors(my_first_part_id,
                                                 my_last_part_id);
