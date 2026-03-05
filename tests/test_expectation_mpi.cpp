@@ -361,6 +361,148 @@ TEST_F(ExpectationRefactorMpiTest, BroadcastSplitHalfReconstructionWith3Ranks)
 }
 
 // ---------------------------------------------------------------------------
+// Phase 1 tests: RefinementMode and MemoryConfig infrastructure.
+//
+// These call pure arithmetic / flag-inspection methods that require no MPI
+// communication, so they run safely on every rank independently.
+// ---------------------------------------------------------------------------
+
+// refinementMode() returns AutoRefine when do_auto_refine is true,
+// regardless of ref_dim.
+TEST_F(ExpectationRefactorMpiTest, RefinementModeIsAutoRefine)
+{
+    opt.do_auto_refine      = true;
+    opt.mymodel.ref_dim     = 3;
+    EXPECT_EQ(opt.refinementMode(), RefinementMode::AutoRefine);
+
+    opt.mymodel.ref_dim     = 2;   // do_auto_refine takes priority
+    EXPECT_EQ(opt.refinementMode(), RefinementMode::AutoRefine);
+}
+
+// refinementMode() returns Class2D when do_auto_refine is false and ref_dim==2.
+TEST_F(ExpectationRefactorMpiTest, RefinementModeIsClass2D)
+{
+    opt.do_auto_refine  = false;
+    opt.mymodel.ref_dim = 2;
+    EXPECT_EQ(opt.refinementMode(), RefinementMode::Class2D);
+}
+
+// refinementMode() returns Class3D when do_auto_refine is false and ref_dim==3.
+TEST_F(ExpectationRefactorMpiTest, RefinementModeIsClass3D)
+{
+    opt.do_auto_refine  = false;
+    opt.mymodel.ref_dim = 3;
+    EXPECT_EQ(opt.refinementMode(), RefinementMode::Class3D);
+}
+
+// computeMemoryConfig() base: requested_free_gpu_bytes equals the stored
+// requested_free_gpu_memory field (user-specified value is preserved).
+TEST_F(ExpectationRefactorMpiTest, ComputeMemoryConfigPreservesRequestedFreeBytes)
+{
+    opt.requested_free_gpu_memory = 256ULL * 1024 * 1024;  // 256 MB
+    const MemoryConfig cfg = opt.computeMemoryConfig();
+    EXPECT_EQ(cfg.requested_free_gpu_bytes, opt.requested_free_gpu_memory)
+        << "Base computeMemoryConfig() must pass through requested_free_gpu_memory unchanged";
+}
+
+// computeMemoryConfig() base: max_pool_size is 0 (uncapped) so current
+// behaviour is preserved.
+TEST_F(ExpectationRefactorMpiTest, ComputeMemoryConfigPoolCapIsZero)
+{
+    const MemoryConfig cfg = opt.computeMemoryConfig();
+    EXPECT_EQ(cfg.max_pool_size, 0)
+        << "Base computeMemoryConfig() must return max_pool_size=0 (uncapped)";
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 tests: virtual variation points.
+// ---------------------------------------------------------------------------
+
+// checkConvergence() sets has_converged when angular sampling is fine enough
+// and resolution gain has stalled for the required number of iterations.
+TEST_F(ExpectationRefactorMpiTest, CheckConvergenceSetsHasConverged)
+{
+    opt.has_converged                        = false;
+    opt.has_fine_enough_angular_sampling     = true;
+    opt.nr_iter_wo_resol_gain                = MAX_NR_ITER_WO_RESOL_GAIN;
+    opt.nr_iter_wo_large_hidden_variable_changes =
+        MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES;
+    opt.do_grad                              = false;
+    opt.gradient_refine                      = false;
+    opt.auto_ignore_angle_changes            = false;
+    opt.mymodel.nr_bodies                    = 1;  // no multi-body body loop
+
+    opt.checkConvergence(/*myverb=*/false);
+
+    EXPECT_TRUE(opt.has_converged)
+        << "has_converged must be true when sampling is fine and resolution "
+           "gain has stalled for MAX_NR_ITER_WO_RESOL_GAIN iterations";
+}
+
+// checkConvergence() leaves has_converged false when angular sampling is not
+// yet fine enough, even if the resolution stall counters are at threshold.
+TEST_F(ExpectationRefactorMpiTest, CheckConvergenceNotSetWhenSamplingNotFine)
+{
+    opt.has_converged                        = false;
+    opt.has_fine_enough_angular_sampling     = false;
+    opt.nr_iter_wo_resol_gain                = MAX_NR_ITER_WO_RESOL_GAIN;
+    opt.nr_iter_wo_large_hidden_variable_changes =
+        MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES;
+    opt.do_grad                              = false;
+    opt.gradient_refine                      = false;
+
+    opt.checkConvergence(/*myverb=*/false);
+
+    EXPECT_FALSE(opt.has_converged)
+        << "has_converged must remain false when angular sampling is not fine enough";
+}
+
+// reconstructionRankForClass(): classification assigns ranks round-robin
+// across all followers (1-indexed).
+TEST_F(ExpectationRefactorMpiTest, ReconstructionRankClassificationRoundRobin)
+{
+    opt.do_split_random_halves = false;
+
+    // With 4 followers, classes 0-3 map to ranks 1-4.
+    EXPECT_EQ(opt.reconstructionRankForClass(0, 4), 1);
+    EXPECT_EQ(opt.reconstructionRankForClass(1, 4), 2);
+    EXPECT_EQ(opt.reconstructionRankForClass(2, 4), 3);
+    EXPECT_EQ(opt.reconstructionRankForClass(3, 4), 4);
+}
+
+// reconstructionRankForClass(): classification wraps back to rank 1 when
+// ith_recons >= nr_followers.
+TEST_F(ExpectationRefactorMpiTest, ReconstructionRankClassificationWraps)
+{
+    opt.do_split_random_halves = false;
+
+    EXPECT_EQ(opt.reconstructionRankForClass(4, 4), 1)
+        << "ith_recons=nr_followers must wrap back to rank 1";
+    EXPECT_EQ(opt.reconstructionRankForClass(5, 4), 2);
+}
+
+// reconstructionRankForClass(): AutoRefine splits followers into two equal
+// halfsets.  With 4 followers (halfset size = 2), all classes are reconstructed
+// by rank 1 or rank 3 (halfset 1 followers), because with a single class
+// (nr_classes=1) only ith_recons=0 is used in practice.
+TEST_F(ExpectationRefactorMpiTest, ReconstructionRankAutoRefineHalfsetSplit)
+{
+    opt.do_split_random_halves = true;
+
+    // 4 followers → halfset_size = 2
+    // ith_recons=0: 2*(0%2)+1 = 1
+    // ith_recons=1: 2*(1%2)+1 = 3
+    // ith_recons=2: 2*(2%2)+1 = 1  (wraps within halfset)
+    EXPECT_EQ(opt.reconstructionRankForClass(0, 4), 1);
+    EXPECT_EQ(opt.reconstructionRankForClass(1, 4), 3);
+    EXPECT_EQ(opt.reconstructionRankForClass(2, 4), 1);
+
+    // 2 followers → halfset_size = 1
+    // ith_recons=0: 2*(0%1)+1 = 1
+    EXPECT_EQ(opt.reconstructionRankForClass(0, 2), 1);
+}
+
+// ---------------------------------------------------------------------------
 // MPI-aware main: let MpiNode call MPI_Init; finalise via its destructor.
 // ---------------------------------------------------------------------------
 int main(int argc, char** argv)

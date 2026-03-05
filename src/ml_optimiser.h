@@ -1262,7 +1262,8 @@ public:
 
 	// Check convergence for auto-refine procedure
 	// Also print convergence information to screen for auto-refine procedure
-	void checkConvergence(bool myverb = true);
+	// Virtual so mode-specific subclasses can override convergence criteria.
+	virtual void checkConvergence(bool myverb = true);
 
 	// Set metadata of a subset of particles to the experimental model
 	void setMetaDataSubset(long int my_first_part_id, long int my_last_part_id);

@@ -155,6 +155,18 @@ public:
    */
   void iterate();
 
+  // Return the MPI rank responsible for reconstructing class/body ith_recons,
+  // given nr_followers total follower ranks.
+  //
+  // Classification (do_split_random_halves=false):
+  //   ranks are assigned round-robin across all followers.
+  // AutoRefine (do_split_random_halves=true):
+  //   followers are split into two equal halfsets; reconstruction ranks are
+  //   the odd-numbered followers within halfset 1.
+  //
+  // Virtual so future mode-specific subclasses can override.
+  virtual int reconstructionRankForClass(int ith_recons, int nr_followers) const;
+
 private:
   void setupDevices();
   void setupCudaHipDevices();
@@ -187,6 +199,12 @@ private:
               CombineWeightedSumsTwoHalvesImplWith3Ranks);
   FRIEND_TEST(ExpectationRefactorMpiTest,
               BroadcastSplitHalfReconstructionWith3Ranks);
+  FRIEND_TEST(ExpectationRefactorMpiTest,
+              ReconstructionRankClassificationRoundRobin);
+  FRIEND_TEST(ExpectationRefactorMpiTest,
+              ReconstructionRankAutoRefineHalfsetSplit);
+  FRIEND_TEST(ExpectationRefactorMpiTest,
+              ReconstructionRankClassificationWraps);
 #endif
 };
 

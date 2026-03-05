@@ -2195,6 +2195,13 @@ void MlOptimiserMpi::combineWeightedSumsTwoRandomHalves() {
   combineWeightedSumsTwoHalvesImpl();
 }
 
+int MlOptimiserMpi::reconstructionRankForClass(int ith_recons,
+                                               int nr_followers) const {
+  if (do_split_random_halves)
+    return 2 * (ith_recons % (nr_followers / 2)) + 1;
+  return ith_recons % nr_followers + 1;
+}
+
 void MlOptimiserMpi::maximization() {
   DEBUG_PRINT << "MlOptimiserMpi::maximization: Entering " << std::endl;
 
@@ -2255,11 +2262,8 @@ void MlOptimiserMpi::maximization() {
 
       if (wsum_model.pdf_class[iclass] > 0.) {
         // Parallelise: each MPI-node has a different reference
-        int reconstruct_rank1;
-        if (do_split_random_halves)
-          reconstruct_rank1 = 2 * (ith_recons % ((node->size - 1) / 2)) + 1;
-        else
-          reconstruct_rank1 = ith_recons % (node->size - 1) + 1;
+        int reconstruct_rank1 =
+            reconstructionRankForClass(ith_recons, node->size - 1);
 
         if (node->rank == reconstruct_rank1) {
 
