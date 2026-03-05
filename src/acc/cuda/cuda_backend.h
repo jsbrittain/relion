@@ -48,7 +48,8 @@ public:
             // In MPI mode, divide memory by number of ranks sharing this device
             free = (size_t)((double)free / (double)opt.gpuDeviceShareAt(i));
 
-            size_t required_free = opt.requested_free_gpu_memory +
+            const MemoryConfig memcfg = opt.computeMemoryConfig();
+            size_t required_free = memcfg.requested_free_gpu_bytes +
                                    GPU_THREAD_MEMORY_OVERHEAD_MB * 1000 * 1000 *
                                    threadcountOnDevice_[i];
 

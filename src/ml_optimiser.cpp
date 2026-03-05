@@ -94,6 +94,23 @@ MlOptimiser::~MlOptimiser()
     accBackend = nullptr;
 }
 
+/** ========================== Mode / memory config  ===================== */
+
+RefinementMode MlOptimiser::refinementMode() const
+{
+    if (do_auto_refine)       return RefinementMode::AutoRefine;
+    if (mymodel.ref_dim == 2) return RefinementMode::Class2D;
+    return RefinementMode::Class3D;
+}
+
+MemoryConfig MlOptimiser::computeMemoryConfig() const
+{
+    // Base implementation: preserve the user-specified GPU reservation and
+    // impose no pool cap.  Override in mode-specific subclasses (Phase 3) to
+    // provide budgets tuned per RefinementMode without touching call-sites.
+    return { requested_free_gpu_memory, /*max_pool_size=*/0 };
+}
+
 /** ========================== I/O operations  =========================== */
 
 void MlOptimiser::usage()
@@ -2466,6 +2483,11 @@ void MlOptimiser::initialiseGeneral(int rank)
 
     // For new thread-parallelization: each thread does 1 particle, so nr_pool=nr_threads
     nr_pool = x_pool*nr_threads;
+    {
+        const MemoryConfig memcfg = computeMemoryConfig();
+        if (memcfg.max_pool_size > 0)
+            nr_pool = XMIPP_MIN(nr_pool, memcfg.max_pool_size);
+    }
 
     if (do_fast_subsets)
     {

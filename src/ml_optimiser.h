@@ -98,6 +98,16 @@ class AccBackend;
 #define MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES 1
 #define MAX_NR_ITER_WO_RESOL_GAIN_GRAD 4
 
+// The active refinement mode, derived from runtime flags by refinementMode().
+enum class RefinementMode { Class2D, Class3D, AutoRefine };
+
+// Per-mode memory budget returned by computeMemoryConfig().
+// All GPU sizes are in bytes.
+struct MemoryConfig {
+    size_t requested_free_gpu_bytes;  // GPU bytes to keep free after particle allocation
+    int    max_pool_size;             // upper bound on nr_pool (0 = uncapped)
+};
+
 // for profiling
 //#define TIMING
 
@@ -132,6 +142,15 @@ public:
 	// Virtual hook so GPU back-ends can get the per-rank device-share count
 	// (overridden in MlOptimiserMpi)
 	virtual int gpuDeviceShareAt(int /*i*/) const { return 1; }
+
+	// Derive the refinement mode from the current runtime flags.
+	RefinementMode refinementMode() const;
+
+	// Return the memory budget appropriate for the current refinement mode.
+	// The base implementation preserves current behaviour (user-specified GPU
+	// reservation, no pool cap).  Override in subclasses to provide
+	// mode-specific budgets without scattering per-mode logic across all callers.
+	virtual MemoryConfig computeMemoryConfig() const;
 
 	// Virtual hook for generating per-thread accelerator timing names
 	// (overridden in MlOptimiserMpi to include the MPI rank)
@@ -468,8 +487,8 @@ public:
 	// Use subsets like in cisTEM to speed up 2D/3D classification
 	bool do_fast_subsets;
 
-	// Available memory (in Gigabyte)
-	size_t available_gpu_memory;
+	// GPU memory (in bytes) to leave free after bundle allocation.
+	// Populated from --free_gpu_memory; consumed via computeMemoryConfig().
 	size_t requested_free_gpu_memory;
 
 	// Perform combination of weight through files written on disc
