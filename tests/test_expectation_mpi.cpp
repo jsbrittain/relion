@@ -672,6 +672,146 @@ TEST(ModeSubclassTest, AutoRefineMemoryConfigExactExtraBytes)
 }
 
 // ---------------------------------------------------------------------------
+// Phase 4 tests: ClassificationOptimiserMpi::computeMemoryConfig() pool cap.
+//
+// For 3D classification with K > 1 classes the pool must be capped at
+// max(1, x_pool * nr_threads / K) to prevent per-class GPU OOM.
+// 2D classification is exempt; uninitialised state returns uncapped.
+// ---------------------------------------------------------------------------
+
+// 3D classification with multiple classes: pool is capped at
+// ceil(x_pool * nr_threads / nr_classes), floored at 1.
+TEST(ModeSubclassTest, Classification3DPoolCappedByClassCount)
+{
+    ClassificationOptimiserMpi opt;
+    opt.node = g_node;
+
+    opt.requested_free_gpu_memory = 0;
+    opt.x_pool                    = 1;
+    opt.nr_threads                = 16;
+    opt.mymodel.ref_dim           = 3;
+    opt.mymodel.nr_classes        = 4;  // base_pool=16, cap = 16/4 = 4
+
+    const MemoryConfig cfg = opt.computeMemoryConfig();
+    EXPECT_EQ(cfg.max_pool_size, 4)
+        << "3D classification must cap pool at base_pool / nr_classes";
+
+    opt.node = nullptr;
+}
+
+// With more classes than threads the cap falls to the minimum of 1.
+TEST(ModeSubclassTest, Classification3DPoolCapMinimumOne)
+{
+    ClassificationOptimiserMpi opt;
+    opt.node = g_node;
+
+    opt.x_pool             = 1;
+    opt.nr_threads         = 8;
+    opt.mymodel.ref_dim    = 3;
+    opt.mymodel.nr_classes = 100;  // base_pool=8, 8/100=0 → floor to 1
+
+    const MemoryConfig cfg = opt.computeMemoryConfig();
+    EXPECT_EQ(cfg.max_pool_size, 1)
+        << "Pool cap must be at least 1 even when nr_classes > base_pool";
+
+    opt.node = nullptr;
+}
+
+// 3D classification with exactly 1 class: pool must be uncapped (single
+// reference, no multi-class pressure).
+TEST(ModeSubclassTest, Classification3DSingleClassUncapped)
+{
+    ClassificationOptimiserMpi opt;
+    opt.node = g_node;
+
+    opt.x_pool             = 1;
+    opt.nr_threads         = 16;
+    opt.mymodel.ref_dim    = 3;
+    opt.mymodel.nr_classes = 1;
+
+    const MemoryConfig cfg = opt.computeMemoryConfig();
+    EXPECT_EQ(cfg.max_pool_size, 0)
+        << "Single-class 3D run must leave pool uncapped";
+
+    opt.node = nullptr;
+}
+
+// 3D classification with nr_classes == 0 (model not yet initialised): uncapped.
+TEST(ModeSubclassTest, Classification3DUnitialisedClassesUncapped)
+{
+    ClassificationOptimiserMpi opt;
+    opt.node = g_node;
+
+    opt.x_pool             = 1;
+    opt.nr_threads         = 16;
+    opt.mymodel.ref_dim    = 3;
+    opt.mymodel.nr_classes = 0;  // guard: model not yet read
+
+    const MemoryConfig cfg = opt.computeMemoryConfig();
+    EXPECT_EQ(cfg.max_pool_size, 0)
+        << "Uninitialised nr_classes must leave pool uncapped";
+
+    opt.node = nullptr;
+}
+
+// 2D classification with many classes: pool must remain uncapped because 2D
+// reference volumes are far smaller and do not cause the same GPU pressure.
+TEST(ModeSubclassTest, Classification2DManyClassesUncapped)
+{
+    ClassificationOptimiserMpi opt;
+    opt.node = g_node;
+
+    opt.x_pool             = 1;
+    opt.nr_threads         = 16;
+    opt.mymodel.ref_dim    = 2;
+    opt.mymodel.nr_classes = 200;
+
+    const MemoryConfig cfg = opt.computeMemoryConfig();
+    EXPECT_EQ(cfg.max_pool_size, 0)
+        << "2D classification must leave pool uncapped regardless of class count";
+
+    opt.node = nullptr;
+}
+
+// The user-specified GPU reservation is preserved unchanged.
+TEST(ModeSubclassTest, ClassificationMemoryConfigPreservesBase)
+{
+    ClassificationOptimiserMpi opt;
+    opt.node = g_node;
+
+    const size_t base              = 512ULL * 1024 * 1024;
+    opt.requested_free_gpu_memory  = base;
+    opt.x_pool                     = 1;
+    opt.nr_threads                 = 8;
+    opt.mymodel.ref_dim            = 3;
+    opt.mymodel.nr_classes         = 4;
+
+    const MemoryConfig cfg = opt.computeMemoryConfig();
+    EXPECT_EQ(cfg.requested_free_gpu_bytes, base)
+        << "Classification must not alter the user GPU reservation";
+
+    opt.node = nullptr;
+}
+
+// x_pool > 1 scales the pool cap proportionally.
+TEST(ModeSubclassTest, ClassificationPoolCapScalesWithXPool)
+{
+    ClassificationOptimiserMpi opt;
+    opt.node = g_node;
+
+    opt.x_pool             = 4;   // user requested 4 images per thread
+    opt.nr_threads         = 8;   // base_pool = 32
+    opt.mymodel.ref_dim    = 3;
+    opt.mymodel.nr_classes = 8;   // cap = 32/8 = 4
+
+    const MemoryConfig cfg = opt.computeMemoryConfig();
+    EXPECT_EQ(cfg.max_pool_size, 4)
+        << "Pool cap must incorporate x_pool multiplier";
+
+    opt.node = nullptr;
+}
+
+// ---------------------------------------------------------------------------
 // Factory tests: makeMlOptimiserMpi() selects the correct concrete type based
 // on the presence or absence of --auto_refine in argv.
 // ---------------------------------------------------------------------------
