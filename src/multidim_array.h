@@ -2679,7 +2679,7 @@ public:
 
             if (Tval > maxval)
                 maxval = Tval;
-            else if (Tval < minval)
+            if (Tval < minval)
                 minval = Tval;
         }
 
