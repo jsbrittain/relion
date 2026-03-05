@@ -18,22 +18,22 @@
  * author citations must be preserved.
  ***************************************************************************/
 
-#include <src/ml_optimiser_mpi.h>
+#include "src/ml_optimiser_mpi_modes.h"
 
 int main(int argc, char **argv)
 {
-	MlOptimiserMpi optimiser;
+	std::unique_ptr<MlOptimiserMpi> optimiser = makeMlOptimiserMpi(argc, argv);
 
 	try
 	{
 		// Read in parameters from the command line
-		optimiser.read(argc, argv);
+		optimiser->read(argc, argv);
 
 		// Set things up
-		optimiser.initialise();
+		optimiser->initialise();
 
 		// Iterate
-    		optimiser.iterate();
+		optimiser->iterate();
 	}
 	catch (RelionError XE)
 	{
@@ -45,4 +45,3 @@ int main(int argc, char **argv)
 
 	return RELION_EXIT_SUCCESS;
 }
-

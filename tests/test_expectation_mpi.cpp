@@ -33,6 +33,7 @@
 
 #include <gtest/gtest.h>
 #include "src/ml_optimiser_mpi.h"
+#include "src/ml_optimiser_mpi_modes.h"
 #include "src/acc/acc_backend_factory.h"
 
 // ---------------------------------------------------------------------------
@@ -500,6 +501,205 @@ TEST_F(ExpectationRefactorMpiTest, ReconstructionRankAutoRefineHalfsetSplit)
     // 2 followers → halfset_size = 1
     // ith_recons=0: 2*(0%1)+1 = 1
     EXPECT_EQ(opt.reconstructionRankForClass(0, 2), 1);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3 tests: mode-specific subclasses.
+//
+// The subclass instances borrow the shared MPI node the same way the fixture
+// does: assign g_node in the test body and clear it before the test exits
+// to prevent ~MlOptimiserMpi() from double-freeing the shared node.
+// ---------------------------------------------------------------------------
+
+// AutoRefineOptimiserMpi::reconstructionRankForClass() always uses the
+// halfset-split formula, regardless of the do_split_random_halves flag.
+TEST(ModeSubclassTest, AutoRefineReconstructionRankHalfset)
+{
+    AutoRefineOptimiserMpi opt;
+    opt.node = g_node;
+
+    // Flag deliberately set to false — subclass must ignore it.
+    opt.do_split_random_halves = false;
+
+    // 4 followers → halfset_size = 2
+    EXPECT_EQ(opt.reconstructionRankForClass(0, 4), 1);
+    EXPECT_EQ(opt.reconstructionRankForClass(1, 4), 3);
+    EXPECT_EQ(opt.reconstructionRankForClass(2, 4), 1);  // wraps within halfset
+
+    // 2 followers → halfset_size = 1
+    EXPECT_EQ(opt.reconstructionRankForClass(0, 2), 1);
+
+    opt.node = nullptr;
+}
+
+// ClassificationOptimiserMpi::reconstructionRankForClass() always uses
+// round-robin, regardless of the do_split_random_halves flag.
+TEST(ModeSubclassTest, ClassificationReconstructionRankRoundRobin)
+{
+    ClassificationOptimiserMpi opt;
+    opt.node = g_node;
+
+    // Flag deliberately set to true — subclass must ignore it.
+    opt.do_split_random_halves = true;
+
+    EXPECT_EQ(opt.reconstructionRankForClass(0, 4), 1);
+    EXPECT_EQ(opt.reconstructionRankForClass(1, 4), 2);
+    EXPECT_EQ(opt.reconstructionRankForClass(2, 4), 3);
+    EXPECT_EQ(opt.reconstructionRankForClass(3, 4), 4);
+    EXPECT_EQ(opt.reconstructionRankForClass(4, 4), 1);  // wraps
+
+    opt.node = nullptr;
+}
+
+// With a single follower, every class maps to rank 1 (no wrap possible).
+TEST(ModeSubclassTest, ClassificationSingleFollowerAlwaysRank1)
+{
+    ClassificationOptimiserMpi opt;
+    opt.node = g_node;
+
+    EXPECT_EQ(opt.reconstructionRankForClass(0, 1), 1);
+    EXPECT_EQ(opt.reconstructionRankForClass(1, 1), 1);
+    EXPECT_EQ(opt.reconstructionRankForClass(9, 1), 1);
+
+    opt.node = nullptr;
+}
+
+// AutoRefineOptimiserMpi::computeMemoryConfig() adds extra GPU headroom when
+// ori_size > current_size (final-iteration box is larger than current box).
+TEST(ModeSubclassTest, AutoRefineMemoryConfigAddsExtraReserve)
+{
+    AutoRefineOptimiserMpi opt;
+    opt.node = g_node;
+
+    opt.requested_free_gpu_memory   = 0;
+    opt.mymodel.padding_factor      = 1.0;
+    opt.mymodel.current_size        = 64;
+    opt.mymodel.ori_size            = 128;  // larger final box
+
+    const MemoryConfig cfg = opt.computeMemoryConfig();
+    EXPECT_GT(cfg.requested_free_gpu_bytes, static_cast<size_t>(0))
+        << "AutoRefine must add extra GPU reserve when ori_size > current_size";
+
+    opt.node = nullptr;
+}
+
+// AutoRefineOptimiserMpi::computeMemoryConfig() adds no extra reserve when
+// ori_size == current_size (already at final box size).
+TEST(ModeSubclassTest, AutoRefineMemoryConfigNoExtraWhenSizeEqual)
+{
+    AutoRefineOptimiserMpi opt;
+    opt.node = g_node;
+
+    const size_t base              = 128ULL * 1024 * 1024;
+    opt.requested_free_gpu_memory  = base;
+    opt.mymodel.padding_factor     = 2.0;
+    opt.mymodel.current_size       = 128;
+    opt.mymodel.ori_size           = 128;  // equal → no extra reserve
+
+    const MemoryConfig cfg = opt.computeMemoryConfig();
+    EXPECT_EQ(cfg.requested_free_gpu_bytes, base)
+        << "AutoRefine must not add extra reserve when ori_size == current_size";
+
+    opt.node = nullptr;
+}
+
+// computeMemoryConfig() adds no extra reserve when current_size == 0
+// (sizes are not yet initialised; guard prevents division/zero-multiplication).
+TEST(ModeSubclassTest, AutoRefineMemoryConfigCurrentSizeZeroNoExtra)
+{
+    AutoRefineOptimiserMpi opt;
+    opt.node = g_node;
+
+    const size_t base              = 64ULL * 1024 * 1024;
+    opt.requested_free_gpu_memory  = base;
+    opt.mymodel.padding_factor     = 2.0;
+    opt.mymodel.current_size       = 0;    // uninitialised → guard must fire
+    opt.mymodel.ori_size           = 128;
+
+    const MemoryConfig cfg = opt.computeMemoryConfig();
+    EXPECT_EQ(cfg.requested_free_gpu_bytes, base)
+        << "AutoRefine must not add extra reserve when current_size == 0";
+
+    opt.node = nullptr;
+}
+
+// The extra reserve is added on top of the user-specified base value, not
+// replacing it.
+TEST(ModeSubclassTest, AutoRefineMemoryConfigExtraAddsToBase)
+{
+    AutoRefineOptimiserMpi opt;
+    opt.node = g_node;
+
+    const size_t base              = 256ULL * 1024 * 1024;
+    opt.requested_free_gpu_memory  = base;
+    opt.mymodel.padding_factor     = 1.0;
+    opt.mymodel.current_size       = 32;
+    opt.mymodel.ori_size           = 64;
+
+    const MemoryConfig cfg = opt.computeMemoryConfig();
+    EXPECT_GT(cfg.requested_free_gpu_bytes, base)
+        << "Extra GPU reserve must be added on top of the base value";
+
+    opt.node = nullptr;
+}
+
+// Verify the exact extra-reserve formula for a known (pf, curr, ori) triplet.
+//
+// pf=1, current_size=32, ori_size=64:
+//   curr_elems = 32 * 32 * (32/2 + 1) = 32 * 32 * 17 = 17,408
+//   ori_elems  = 64 * 64 * (64/2 + 1) = 64 * 64 * 33 = 135,168
+//   delta      = 117,760
+//   extra      = 117,760 * 2 halfsets * 3 arrays * sizeof(RFLOAT)
+TEST(ModeSubclassTest, AutoRefineMemoryConfigExactExtraBytes)
+{
+    AutoRefineOptimiserMpi opt;
+    opt.node = g_node;
+
+    opt.requested_free_gpu_memory  = 0;
+    opt.mymodel.padding_factor     = 1.0;
+    opt.mymodel.current_size       = 32;
+    opt.mymodel.ori_size           = 64;
+
+    const size_t curr_elems = 32ULL * 32 * 17;
+    const size_t ori_elems  = 64ULL * 64 * 33;
+    const size_t expected   = (ori_elems - curr_elems) * 2 * 3 * sizeof(RFLOAT);
+
+    const MemoryConfig cfg = opt.computeMemoryConfig();
+    EXPECT_EQ(cfg.requested_free_gpu_bytes, expected)
+        << "Extra GPU reserve must exactly match the halfset backprojector delta";
+
+    opt.node = nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// Factory tests: makeMlOptimiserMpi() selects the correct concrete type based
+// on the presence or absence of --auto_refine in argv.
+// ---------------------------------------------------------------------------
+
+// With --auto_refine present the factory returns AutoRefineOptimiserMpi.
+TEST(ModeSubclassTest, FactoryAutoRefineArgReturnsAutoRefine)
+{
+    const char* args[] = {"relion_refine_mpi", "--auto_refine"};
+    auto opt = makeMlOptimiserMpi(2, const_cast<char**>(args));
+
+    EXPECT_NE(dynamic_cast<AutoRefineOptimiserMpi*>(opt.get()), nullptr)
+        << "makeMlOptimiserMpi must return AutoRefineOptimiserMpi when "
+           "--auto_refine is present";
+
+    opt->node = nullptr;
+}
+
+// Without --auto_refine the factory returns ClassificationOptimiserMpi.
+TEST(ModeSubclassTest, FactoryNoAutoRefineArgReturnsClassification)
+{
+    const char* args[] = {"relion_refine_mpi", "--i", "particles.star"};
+    auto opt = makeMlOptimiserMpi(3, const_cast<char**>(args));
+
+    EXPECT_NE(dynamic_cast<ClassificationOptimiserMpi*>(opt.get()), nullptr)
+        << "makeMlOptimiserMpi must return ClassificationOptimiserMpi when "
+           "--auto_refine is absent";
+
+    opt->node = nullptr;
 }
 
 // ---------------------------------------------------------------------------
