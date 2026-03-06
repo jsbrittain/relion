@@ -199,6 +199,123 @@ TEST(GetMatricesTest, D2_AllRMatricesHaveDeterminantOne)
     }
 }
 
+// -------------------------------------------------- more read_sym_file --
+
+TEST(ReadSymFileTest, C5_FourNonTrivialSymmetries)
+{
+    // C5: rotations by 72°, 144°, 216°, 288°.
+    SymList sl;
+    sl.read_sym_file("C5");
+    EXPECT_EQ(sl.SymsNo(), 4);
+}
+
+TEST(ReadSymFileTest, D4_SevenNonTrivialSymmetries)
+{
+    // D4: 4 rotations around Z + 4 C2 rotations - identity = 7
+    SymList sl;
+    sl.read_sym_file("D4");
+    EXPECT_EQ(sl.SymsNo(), 7);
+}
+
+TEST(ReadSymFileTest, T_ElevenNonTrivialSymmetries)
+{
+    // T (tetrahedral): 12 rotations total → 11 non-identity
+    SymList sl;
+    sl.read_sym_file("T");
+    EXPECT_EQ(sl.SymsNo(), 11);
+}
+
+TEST(ReadSymFileTest, O_TwentyThreeNonTrivialSymmetries)
+{
+    // O (octahedral): 24 rotations total → 23 non-identity
+    SymList sl;
+    sl.read_sym_file("O");
+    EXPECT_EQ(sl.SymsNo(), 23);
+}
+
+TEST(ReadSymFileTest, I_FiftyNineNonTrivialSymmetries)
+{
+    // I (icosahedral): 60 rotations total → 59 non-identity
+    SymList sl;
+    sl.read_sym_file("I");
+    EXPECT_EQ(sl.SymsNo(), 59);
+}
+
+// -------------------------------------- matrix orthogonality checks --
+
+static void checkMatricesOrthogonal(const std::string& group_name)
+{
+    SymList sl;
+    sl.read_sym_file(group_name);
+    for (int i = 0; i < sl.SymsNo(); i++)
+    {
+        Matrix2D<RFLOAT> L, R;
+        sl.get_matrices(i, L, R);
+        // Check R * Rᵀ = I
+        Matrix2D<RFLOAT> RRt = R * R.transpose();
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 3; c++)
+                EXPECT_NEAR(RRt(r,c), (r==c) ? 1.0 : 0.0, 1e-5)
+                    << group_name << " matrix " << i;
+    }
+}
+
+static void checkMatricesDet1(const std::string& group_name)
+{
+    SymList sl;
+    sl.read_sym_file(group_name);
+    for (int i = 0; i < sl.SymsNo(); i++)
+    {
+        Matrix2D<RFLOAT> L, R;
+        sl.get_matrices(i, L, R);
+        double det = R(0,0)*(R(1,1)*R(2,2)-R(1,2)*R(2,1))
+                   - R(0,1)*(R(1,0)*R(2,2)-R(1,2)*R(2,0))
+                   + R(0,2)*(R(1,0)*R(2,1)-R(1,1)*R(2,0));
+        EXPECT_NEAR(std::abs(det), 1.0, 1e-5)
+            << group_name << " matrix " << i;
+    }
+}
+
+TEST(MatrixOrthogonalityTest, C5_AllOrthogonal)
+{
+    checkMatricesOrthogonal("C5");
+}
+
+TEST(MatrixOrthogonalityTest, D4_AllOrthogonal)
+{
+    checkMatricesOrthogonal("D4");
+}
+
+TEST(MatrixOrthogonalityTest, T_AllOrthogonal)
+{
+    checkMatricesOrthogonal("T");
+}
+
+TEST(MatrixOrthogonalityTest, O_AllOrthogonal)
+{
+    checkMatricesOrthogonal("O");
+}
+
+TEST(MatrixDet1Test, C5_AllDet1)
+{
+    checkMatricesDet1("C5");
+}
+
+TEST(MatrixDet1Test, D4_AllDet1)
+{
+    checkMatricesDet1("D4");
+}
+
+TEST(MatrixDet1Test, T_AllDet1)
+{
+    checkMatricesDet1("T");
+}
+
+TEST(MatrixDet1Test, O_AllDet1)
+{
+    checkMatricesDet1("O");
+}
+
 // ----------------------------------------- non_redundant_ewald_sphere --
 
 TEST(EwaldSphereTest, C1_FullSphere)

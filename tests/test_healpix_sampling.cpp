@@ -415,6 +415,156 @@ TEST_F(HealpixSamplingSymTest, SymmetryGroup_MatchesFnSym)
 }
 
 // ---------------------------------------------------------------------------
+// NrSamplingPoints
+// ---------------------------------------------------------------------------
+
+TEST(HealpixSamplingPointsTest, NrSamplingPoints_EqualsProduct_3D)
+{
+    HealpixSampling s = make3D(1);
+    long int nd = s.NrDirections(0);
+    long int np = s.NrPsiSamplings(0);
+    long int nt = s.NrTranslationalSamplings(0);
+    long int total = s.NrSamplingPoints(0);
+    EXPECT_EQ(total, nd * np * nt);
+}
+
+TEST(HealpixSamplingPointsTest, NrSamplingPoints_2D_EqualsProduct)
+{
+    HealpixSampling s = make2D();
+    long int np = s.NrPsiSamplings(0);
+    long int nt = s.NrTranslationalSamplings(0);
+    long int total = s.NrSamplingPoints(0);
+    // 2D: NrDirections = 1, total = 1 * NrPsi * NrTrans
+    EXPECT_EQ(total, np * nt);
+}
+
+TEST(HealpixSamplingPointsTest, OversamplingIncreases_Directions)
+{
+    // NrDirections grows with oversampling_order when directions are seeded
+    HealpixSampling s = make3D(1);
+    s.addOneOrientation(0., 0., 0., true);
+    s.addOneOrientation(45., 30., 0.);
+    long int base = s.NrDirections(0);
+    long int over = s.NrDirections(1);
+    EXPECT_GT(over, base);
+    EXPECT_EQ(over, 4 * base); // each direction oversampled 4x (2D oversampling)
+}
+
+// ---------------------------------------------------------------------------
+// oversamplingFactor
+// ---------------------------------------------------------------------------
+
+TEST(HealpixSamplingOversamplingTest, OversamplingFactor_Order0_Is1)
+{
+    HealpixSampling s = make3D(1);
+    EXPECT_EQ(s.oversamplingFactorOrientations(0), 1);
+    EXPECT_EQ(s.oversamplingFactorTranslations(0), 1);
+}
+
+TEST(HealpixSamplingOversamplingTest, OversamplingFactor_Order1_IsEight)
+{
+    HealpixSampling s = make3D(1);
+    // oversampling_order=1 → 2^3=8 for orientations (rot, tilt, psi each doubled)
+    EXPECT_EQ(s.oversamplingFactorOrientations(1), 8);
+}
+
+TEST(HealpixSamplingOversamplingTest, OversamplingFactor_Trans_Order1_IsFour)
+{
+    HealpixSampling s = make3D(1, 1.0, 5.0); // non-zero range for translations
+    // Translation oversampling for order=1 → 2^2=4 (x, y)
+    EXPECT_EQ(s.oversamplingFactorTranslations(1), 4);
+}
+
+// ---------------------------------------------------------------------------
+// checkDirection
+// ---------------------------------------------------------------------------
+
+TEST(HealpixSamplingCheckDirTest, ValidAngles_Unchanged)
+{
+    HealpixSampling s = make3D(1);
+    RFLOAT rot = 45.0, tilt = 60.0;
+    s.checkDirection(rot, tilt);
+    // Within valid range: rot in [-180,180], tilt in [0,180]
+    EXPECT_GE(tilt, 0.0);
+    EXPECT_LE(tilt, 180.0);
+    EXPECT_GE(rot, -180.0);
+    EXPECT_LE(rot, 180.0);
+}
+
+TEST(HealpixSamplingCheckDirTest, NegativeTilt_Corrected)
+{
+    HealpixSampling s = make3D(1);
+    RFLOAT rot = 10.0, tilt = -30.0;
+    s.checkDirection(rot, tilt);
+    // checkDirection should bring tilt >= 0
+    EXPECT_GE(tilt, 0.0);
+    EXPECT_LE(tilt, 180.0);
+}
+
+TEST(HealpixSamplingCheckDirTest, LargePositiveRot_Wrapped)
+{
+    // checkDirection wraps rot to [-180,180]; tilt>180 is not modified
+    HealpixSampling s = make3D(1);
+    RFLOAT rot = 270.0, tilt = 45.0;
+    s.checkDirection(rot, tilt);
+    EXPECT_GE(rot, -180.0);
+    EXPECT_LE(rot, 180.0);
+    EXPECT_NEAR(tilt, 45.0, 1e-9); // tilt unchanged
+}
+
+// ---------------------------------------------------------------------------
+// getOrientations
+// ---------------------------------------------------------------------------
+
+TEST(HealpixSamplingOrientationsTest, GetOrientations_ReturnsNonEmpty)
+{
+    HealpixSampling s = make3D(1);
+    std::vector<RFLOAT> my_rot, my_tilt, my_psi;
+    std::vector<int> ptr_dir, ptr_psi;
+    std::vector<RFLOAT> dir_prior, psi_prior;
+
+    s.getOrientations(0, 0, 0, my_rot, my_tilt, my_psi,
+                      ptr_dir, dir_prior, ptr_psi, psi_prior);
+
+    EXPECT_FALSE(my_rot.empty());
+    EXPECT_EQ(my_rot.size(), my_tilt.size());
+    EXPECT_EQ(my_rot.size(), my_psi.size());
+}
+
+TEST(HealpixSamplingOrientationsTest, GetOrientations_AnglesInRange)
+{
+    HealpixSampling s = make3D(1);
+    std::vector<RFLOAT> my_rot, my_tilt, my_psi;
+    std::vector<int> ptr_dir, ptr_psi;
+    std::vector<RFLOAT> dir_prior, psi_prior;
+
+    s.getOrientations(0, 0, 0, my_rot, my_tilt, my_psi,
+                      ptr_dir, dir_prior, ptr_psi, psi_prior);
+
+    for (size_t i = 0; i < my_tilt.size(); i++)
+    {
+        EXPECT_GE(my_tilt[i], 0.0)   << "tilt[" << i << "]=" << my_tilt[i];
+        EXPECT_LE(my_tilt[i], 180.0) << "tilt[" << i << "]=" << my_tilt[i];
+    }
+}
+
+TEST(HealpixSamplingOrientationsTest, GetOrientations_OverSampled_MorePoints)
+{
+    HealpixSampling s = make3D(1);
+    std::vector<RFLOAT> rot0, tilt0, psi0, rot1, tilt1, psi1;
+    std::vector<int> ptr_dir, ptr_psi;
+    std::vector<RFLOAT> dir_prior, psi_prior;
+
+    s.getOrientations(0, 0, 0, rot0, tilt0, psi0,
+                      ptr_dir, dir_prior, ptr_psi, psi_prior);
+    ptr_dir.clear(); ptr_psi.clear(); dir_prior.clear(); psi_prior.clear();
+    s.getOrientations(0, 0, 1, rot1, tilt1, psi1,
+                      ptr_dir, dir_prior, ptr_psi, psi_prior);
+
+    EXPECT_GT(rot1.size(), rot0.size());
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 

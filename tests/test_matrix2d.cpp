@@ -42,6 +42,7 @@
 #include <gtest/gtest.h>
 #include <cmath>
 #include "src/matrix2d.h"
+#include "src/error.h"
 
 using Mat = Matrix2D<double>;
 using Vec = Matrix1D<double>;
@@ -603,6 +604,165 @@ TEST(Matrix2DTest, TypeCastIntToDouble)
     typeCast(iv, dv);
     EXPECT_NEAR(dv(0,0), 1.0, EPS);
     EXPECT_NEAR(dv(1,1), 4.0, EPS);
+}
+
+// ---------------------------------------------------------------------------
+// 29. svdcmp — SVD decomposition: A = U * diag(W) * Vᵀ
+// ---------------------------------------------------------------------------
+
+TEST(Matrix2DSvdTest, Reconstruction_3x3)
+{
+    // Create a simple 3×3 matrix
+    Mat A(3, 3);
+    A(0,0)=1; A(0,1)=2; A(0,2)=3;
+    A(1,0)=4; A(1,1)=5; A(1,2)=6;
+    A(2,0)=7; A(2,1)=8; A(2,2)=9;
+
+    Matrix2D<RFLOAT> U, V;
+    Matrix1D<RFLOAT> W;
+    svdcmp(A, U, W, V);
+
+    // Reconstruct A = U * diag(W) * Vᵀ
+    Matrix2D<RFLOAT> Vt = V.transpose();
+    // Build diag(W) as matrix
+    Matrix2D<RFLOAT> DW(3, 3);
+    DW.initZeros();
+    for (int i = 0; i < 3; i++)
+        DW(i, i) = W(i);
+
+    Matrix2D<RFLOAT> Final = U * DW * Vt;
+
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++)
+            EXPECT_NEAR(Final(i,j), (RFLOAT)A(i,j), 1e-6) << "i=" << i << " j=" << j;
+}
+
+TEST(Matrix2DSvdTest, SingularValues_NonNegative)
+{
+    Mat A(3, 3);
+    A.initIdentity();
+    A(0,0) = 2; A(1,1) = 3; A(2,2) = 5;
+
+    Matrix2D<RFLOAT> U, V;
+    Matrix1D<RFLOAT> W;
+    svdcmp(A, U, W, V);
+
+    FOR_ALL_ELEMENTS_IN_MATRIX1D(W)
+        EXPECT_GE(W(i), 0.0);
+}
+
+TEST(Matrix2DSvdTest, U_IsOrthogonal)
+{
+    Mat A(3, 3);
+    A(0,0)=2; A(0,1)=1; A(0,2)=0;
+    A(1,0)=1; A(1,1)=3; A(1,2)=1;
+    A(2,0)=0; A(2,1)=1; A(2,2)=4;
+
+    Matrix2D<RFLOAT> U, V;
+    Matrix1D<RFLOAT> W;
+    svdcmp(A, U, W, V);
+
+    // Uᵀ * U should be identity
+    Matrix2D<RFLOAT> UtU = U.transpose() * U;
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++)
+            EXPECT_NEAR(UtU(i,j), (i==j) ? 1.0 : 0.0, 1e-6);
+}
+
+// ---------------------------------------------------------------------------
+// 30. solve(A, b, result, tol) — SVD-based linear solver
+// ---------------------------------------------------------------------------
+
+TEST(Matrix2DSolveTest, Solve2x2_SVD)
+{
+    // [[2,1],[1,3]] * [1,3] = [5,10]
+    Mat A(2, 2);
+    A(0,0)=2; A(0,1)=1;
+    A(1,0)=1; A(1,1)=3;
+
+    Matrix1D<RFLOAT> b(2), result;
+    b(0)=5; b(1)=10;
+
+    solve(A, b, result, 1e-10);
+
+    EXPECT_NEAR(result(0), 1.0, 1e-6);
+    EXPECT_NEAR(result(1), 3.0, 1e-6);
+}
+
+TEST(Matrix2DSolveTest, Solve3x3_SVD)
+{
+    // Diagonal system: diag(2,3,4) * [1,2,3] = [2,6,12]
+    Mat A(3, 3);
+    A.initZeros();
+    A(0,0)=2; A(1,1)=3; A(2,2)=4;
+
+    Matrix1D<RFLOAT> b(3), result;
+    b(0)=2; b(1)=6; b(2)=12;
+
+    solve(A, b, result, 1e-10);
+
+    EXPECT_NEAR(result(0), 1.0, 1e-6);
+    EXPECT_NEAR(result(1), 2.0, 1e-6);
+    EXPECT_NEAR(result(2), 3.0, 1e-6);
+}
+
+TEST(Matrix2DSolveTest, EmptyMatrix_Throws)
+{
+    Mat A;
+    Matrix1D<RFLOAT> b, result;
+    EXPECT_THROW(solve(A, b, result, 1e-10), RelionError);
+}
+
+TEST(Matrix2DSolveTest, MismatchedSizes_Throws)
+{
+    Mat A(2, 2);
+    A.initIdentity();
+    Matrix1D<RFLOAT> b(3), result;
+    EXPECT_THROW(solve(A, b, result, 1e-10), RelionError);
+}
+
+// ---------------------------------------------------------------------------
+// 31. ludcmp / lubksb — Matrix2D LU wrappers
+// ---------------------------------------------------------------------------
+
+TEST(Matrix2DLUTest, Solve2x2)
+{
+    // [[2,1],[1,3]] * [1,3] = [5,10]
+    Mat A(2, 2);
+    A(0,0)=2; A(0,1)=1;
+    A(1,0)=1; A(1,1)=3;
+
+    Matrix2D<RFLOAT> LU;
+    Matrix1D<int> indx;
+    RFLOAT d = 0;
+    ludcmp(A, LU, indx, d);
+
+    Matrix1D<RFLOAT> b(2);
+    b(0)=5; b(1)=10;
+    lubksb(LU, indx, b);
+
+    EXPECT_NEAR(b(0), 1.0, 1e-9);
+    EXPECT_NEAR(b(1), 3.0, 1e-9);
+}
+
+TEST(Matrix2DLUTest, Solve3x3_Diagonal)
+{
+    Mat A(3, 3);
+    A.initZeros();
+    A(0,0)=2; A(1,1)=3; A(2,2)=4;
+
+    Matrix2D<RFLOAT> LU;
+    Matrix1D<int> indx;
+    RFLOAT d = 0;
+    ludcmp(A, LU, indx, d);
+
+    Matrix1D<RFLOAT> b(3);
+    b(0)=2; b(1)=6; b(2)=12;
+    lubksb(LU, indx, b);
+
+    EXPECT_NEAR(b(0), 1.0, 1e-9);
+    EXPECT_NEAR(b(1), 2.0, 1e-9);
+    EXPECT_NEAR(b(2), 3.0, 1e-9);
 }
 
 // ---------------------------------------------------------------------------

@@ -234,6 +234,179 @@ TEST(LudcmpTest, Solve3x3System)
     EXPECT_NEAR(b[3], 3.0, 1e-9);
 }
 
+// ---------------------------------------------------------------- bessi1 --
+
+TEST(Bessi1Test, AtZero_IsZero)
+{
+    EXPECT_NEAR(bessi1(0.0), 0.0, EPS);
+}
+
+TEST(Bessi1Test, AtOne_KnownValue)
+{
+    // I1(1) ≈ 0.5652
+    EXPECT_NEAR(bessi1(1.0), 0.5652, 0.001);
+}
+
+TEST(Bessi1Test, PositiveForPositiveX)
+{
+    EXPECT_GT(bessi1(0.5), 0.0);
+    EXPECT_GT(bessi1(2.0), 0.0);
+    EXPECT_GT(bessi1(5.0), 0.0);
+}
+
+TEST(Bessi1Test, MonotoneIncreasing)
+{
+    EXPECT_LT(bessi1(0.5), bessi1(1.0));
+    EXPECT_LT(bessi1(1.0), bessi1(2.0));
+}
+
+// ----------------------------------------------- bessi0_5 / bessi1_5 --
+
+TEST(Bessi0_5Test, AtZero_IsZero)
+{
+    EXPECT_NEAR(bessi0_5(0.0), 0.0, EPS);
+}
+
+TEST(Bessi0_5Test, PositiveForPositiveX)
+{
+    // bessi0_5(x) = sqrt(2/(pi*x)) * sinh(x) > 0 for x > 0
+    EXPECT_GT(bessi0_5(1.0), 0.0);
+    EXPECT_GT(bessi0_5(2.0), 0.0);
+}
+
+TEST(Bessi1_5Test, AtZero_IsZero)
+{
+    EXPECT_NEAR(bessi1_5(0.0), 0.0, EPS);
+}
+
+TEST(Bessi1_5Test, PositiveForPositiveX)
+{
+    EXPECT_GT(bessi1_5(1.0), 0.0);
+}
+
+// ---------------------------------------------------------------- bessi2 --
+
+TEST(Bessi2Test, AtZero_IsZero)
+{
+    EXPECT_NEAR(bessi2(0.0), 0.0, EPS);
+}
+
+TEST(Bessi2Test, AtOne_KnownValue)
+{
+    // I2(1) ≈ 0.1357
+    EXPECT_NEAR(bessi2(1.0), 0.1357, 0.002);
+}
+
+TEST(Bessi2Test, PositiveForPositiveX)
+{
+    EXPECT_GT(bessi2(1.0), 0.0);
+    EXPECT_GT(bessi2(3.0), 0.0);
+}
+
+// ---------------------------------------------------------------- bessi3 --
+
+TEST(Bessi3Test, AtZero_IsZero)
+{
+    EXPECT_NEAR(bessi3(0.0), 0.0, EPS);
+}
+
+TEST(Bessi3Test, PositiveForPositiveX)
+{
+    EXPECT_GT(bessi3(1.0), 0.0);
+    EXPECT_GT(bessi3(2.0), 0.0);
+}
+
+TEST(Bessi3Test, SmallerThanBessi2_AtSmallX)
+{
+    // For small x, I_n(x) < I_{n-1}(x)
+    EXPECT_LT(bessi3(1.0), bessi2(1.0));
+}
+
+// ---------------------------------------------------------------- bessi4 --
+
+TEST(Bessi4Test, AtZero_IsZero)
+{
+    EXPECT_NEAR(bessi4(0.0), 0.0, EPS);
+}
+
+TEST(Bessi4Test, PositiveForPositiveX)
+{
+    EXPECT_GT(bessi4(1.0), 0.0);
+}
+
+TEST(Bessi4Test, SmallerThanBessi3_AtSmallX)
+{
+    EXPECT_LT(bessi4(1.0), bessi3(1.0));
+}
+
+// ----------------------------------------- bessi2_5 / bessi3_5 --
+
+TEST(Bessi2_5Test, AtZero_IsZero)
+{
+    EXPECT_NEAR(bessi2_5(0.0), 0.0, EPS);
+}
+
+TEST(Bessi2_5Test, PositiveForPositiveX)
+{
+    EXPECT_GT(bessi2_5(1.0), 0.0);
+}
+
+TEST(Bessi3_5Test, AtZero_IsZero)
+{
+    EXPECT_NEAR(bessi3_5(0.0), 0.0, EPS);
+}
+
+TEST(Bessi3_5Test, PositiveForPositiveX)
+{
+    EXPECT_GT(bessi3_5(1.0), 0.0);
+}
+
+// ---------------------------------------------------------- bessj1_5 --
+
+TEST(Bessj1_5Test, PositiveForSmallX)
+{
+    // J_{3/2}(x) = sqrt(2/(pi*x)) * (sin(x)/x - cos(x))
+    // For small x > 0, this is positive (sin dominates)
+    EXPECT_GT(bessj1_5(1.0), 0.0);
+}
+
+TEST(Bessj1_5Test, SmallMagnitudeForLargeX)
+{
+    // Bessel functions decay as 1/sqrt(x)
+    EXPECT_LT(std::abs(bessj1_5(20.0)), 0.2);
+}
+
+// ---------------------------------------------------------- bessj3_5 --
+
+TEST(Bessj3_5Test, PositiveForSmallX)
+{
+    EXPECT_GT(bessj3_5(2.0), 0.0);
+}
+
+TEST(Bessj3_5Test, SmallMagnitudeForLargeX)
+{
+    EXPECT_LT(std::abs(bessj3_5(20.0)), 0.2);
+}
+
+// ----------------------------------------------- recurrence relation --
+
+TEST(BesselRecurrenceTest, Bessi2_SatisfiesRecurrence)
+{
+    // I_{n+1}(x) = I_{n-1}(x) - (2n/x) * I_n(x)
+    // => I_2(x) = I_0(x) - (2/x) * I_1(x)
+    RFLOAT x = 2.0;
+    RFLOAT expected = bessi0(x) - (2.0 / x) * bessi1(x);
+    EXPECT_NEAR(bessi2(x), expected, EPS);
+}
+
+TEST(BesselRecurrenceTest, Bessi3_SatisfiesRecurrence)
+{
+    // I_3(x) = I_1(x) - (4/x) * I_2(x)
+    RFLOAT x = 3.0;
+    RFLOAT expected = bessi1(x) - (4.0 / x) * bessi2(x);
+    EXPECT_NEAR(bessi3(x), expected, EPS);
+}
+
 int main(int argc, char **argv)
 {
     ::testing::InitGoogleTest(&argc, argv);
