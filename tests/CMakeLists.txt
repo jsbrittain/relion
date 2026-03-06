@@ -23,6 +23,7 @@ target_link_libraries(test_multidim_array
     relion_lib
     ${FFTW_LIBRARIES}
 )
+add_test(NAME test_multidim_array COMMAND test_multidim_array)
 
 add_executable(test_expectation_mpi
     ${CMAKE_SOURCE_DIR}/tests/test_expectation_mpi.cpp
@@ -38,6 +39,9 @@ target_link_libraries(test_expectation_mpi
     relion_lib
     MPI::MPI_CXX
     ${FFTW_LIBRARIES}
+)
+add_test(NAME test_expectation_mpi
+    COMMAND mpirun -n 2 $<TARGET_FILE:test_expectation_mpi>
 )
 
 foreach(test_name IN ITEMS test_matrix1d test_matrix2d test_euler test_strings test_ctf test_metadata_table)
@@ -55,6 +59,7 @@ foreach(test_name IN ITEMS test_matrix1d test_matrix2d test_euler test_strings t
         relion_lib
         ${FFTW_LIBRARIES}
     )
+    add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
 
 # ----------------------------------------------------------------COVERAGE TARGET--
