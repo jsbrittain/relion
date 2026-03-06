@@ -335,6 +335,129 @@ TEST(EulerTest, Rotation3DMatrixMatchesAngles2matrix)
 }
 
 // ---------------------------------------------------------------------------
+// 11. Gimbal lock: tilt=0 — the matrix is correct even if angles are degenerate
+// ---------------------------------------------------------------------------
+TEST(EulerTest, GimbalLock_Tilt0_MatrixCorrect)
+{
+    // (rot=30, tilt=0, psi=60) and (rot=0, tilt=0, psi=90) both represent
+    // a pure Z-axis rotation by rot+psi. Check that both produce the same matrix.
+    const RFLOAT combined = 30 + 60;  // rot + psi = 90 degrees
+    Matrix2D<RFLOAT> A1, A2;
+    Euler_angles2matrix(30, 0, 60, A1);
+    Euler_angles2matrix(0,  0, combined, A2);  // same combined rotation
+
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++)
+            EXPECT_NEAR(A1(i,j), A2(i,j), EPS)
+                << "at (" << i << "," << j << ")";
+}
+
+TEST(EulerTest, GimbalLock_Tilt0_MatrixIsOrthogonal)
+{
+    // Verify the matrix produced at gimbal lock is still a valid rotation.
+    Matrix2D<RFLOAT> A;
+    Euler_angles2matrix(30, 0, 45, A);
+    Matrix2D<RFLOAT> product = A * A.transpose();
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++)
+            EXPECT_NEAR(product(i,j), (i == j) ? 1.0 : 0.0, EPS);
+}
+
+TEST(EulerTest, GimbalLock_Tilt180_MatrixIsOrthogonal)
+{
+    Matrix2D<RFLOAT> A;
+    Euler_angles2matrix(0, 180, 0, A);
+    Matrix2D<RFLOAT> product = A * A.transpose();
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++)
+            EXPECT_NEAR(product(i,j), (i == j) ? 1.0 : 0.0, EPS);
+}
+
+// ---------------------------------------------------------------------------
+// 12. apply_transf with non-identity transforms
+// ---------------------------------------------------------------------------
+// Composing two rotations: (rot=0, tilt=90, psi=0) applied to (0, 0, 0)
+// should reproduce the rotation from tilt=90.
+TEST(EulerTest, ApplyTransfGivesComposedRotation)
+{
+    // L = rotation for (0, 90, 0)
+    Matrix2D<RFLOAT> L, R;
+    Euler_angles2matrix(0, 90, 0, L);
+    R.initIdentity(3);
+
+    RFLOAT nr, nt, np;
+    Euler_apply_transf(L, R, 0, 0, 0, nr, nt, np);
+
+    // The result matrix must match L
+    Matrix2D<RFLOAT> A_in;
+    Euler_angles2matrix(0, 0, 0, A_in);
+    Matrix2D<RFLOAT> A_out;
+    Euler_angles2matrix(nr, nt, np, A_out);
+
+    Matrix2D<RFLOAT> expected = L * A_in;
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++)
+            EXPECT_NEAR(A_out(i,j), expected(i,j), EPS)
+                << "at (" << i << "," << j << ")";
+}
+
+// ---------------------------------------------------------------------------
+// 13. angles2matrix round-trip at various angle combinations
+// ---------------------------------------------------------------------------
+TEST(EulerTest, RoundTrip_AllNinetyDegrees)
+{
+    const RFLOAT rot = 90, tilt = 90, psi = 90;
+    Matrix2D<RFLOAT> A;
+    Euler_angles2matrix(rot, tilt, psi, A);
+
+    // The matrix must be a proper rotation.
+    EXPECT_NEAR(A.det(), 1.0, EPS);
+    Matrix2D<RFLOAT> product = A * A.transpose();
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++)
+            EXPECT_NEAR(product(i,j), (i == j) ? 1.0 : 0.0, EPS);
+}
+
+TEST(EulerTest, RoundTrip_NegativeAngles)
+{
+    const RFLOAT rot = -30, tilt = 50, psi = -70;
+    Matrix2D<RFLOAT> A;
+    Euler_angles2matrix(rot, tilt, psi, A);
+    EXPECT_NEAR(A.det(), 1.0, EPS);
+}
+
+// ---------------------------------------------------------------------------
+// 14. direction2angles: known directions give expected angles
+// ---------------------------------------------------------------------------
+// (1, 0, 0) direction → alpha=0, beta=90
+TEST(EulerTest, Direction_XAxis_Alpha0_Beta90)
+{
+    Matrix1D<RFLOAT> v;
+    v.resize(3);
+    XX(v) = 1.0; YY(v) = 0.0; ZZ(v) = 0.0;
+
+    RFLOAT alpha, beta;
+    Euler_direction2angles(v, alpha, beta);
+
+    EXPECT_NEAR(beta, 90.0, EPS);
+    // alpha is 0 for +X direction
+    EXPECT_NEAR(alpha, 0.0, EPS);
+}
+
+// (0, 0, -1) direction → tilt = 180
+TEST(EulerTest, Direction_NegZAxis_Beta180)
+{
+    Matrix1D<RFLOAT> v;
+    v.resize(3);
+    XX(v) = 0.0; YY(v) = 0.0; ZZ(v) = -1.0;
+
+    RFLOAT alpha, beta;
+    Euler_direction2angles(v, alpha, beta);
+
+    EXPECT_NEAR(beta, 180.0, EPS);
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 int main(int argc, char** argv)

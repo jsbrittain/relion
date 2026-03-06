@@ -513,6 +513,229 @@ TEST(MetaDataTableTest, GetActiveLabelsExcludesDeactivated)
 }
 
 // ---------------------------------------------------------------------------
+// 19. Convenience typed accessors: getInt, getRfloat, getBool, getString
+// ---------------------------------------------------------------------------
+TEST(MetaDataTableTest, GetInt_ReturnsIntValue)
+{
+    MetaDataTable mdt;
+    mdt.addObject();
+    mdt.setValue(EMDL_MLMODEL_NR_CLASSES, 4);
+    EXPECT_EQ(mdt.getInt(EMDL_MLMODEL_NR_CLASSES, 0), 4);
+}
+
+TEST(MetaDataTableTest, GetRfloat_ReturnsRfloatValue)
+{
+    MetaDataTable mdt;
+    mdt.addObject();
+    mdt.setValue(EMDL_CTF_DEFOCUSU, (RFLOAT)17500.0);
+    EXPECT_NEAR(mdt.getRfloat(EMDL_CTF_DEFOCUSU, 0), 17500.0, 1e-3);
+}
+
+TEST(MetaDataTableTest, GetBool_ReturnsBoolValue)
+{
+    MetaDataTable mdt;
+    mdt.addObject();
+    mdt.setValue(EMDL_OPTIMISER_DO_ZERO_MASK, true);
+    EXPECT_TRUE(mdt.getBool(EMDL_OPTIMISER_DO_ZERO_MASK, 0));
+}
+
+TEST(MetaDataTableTest, GetString_ReturnsStringValue)
+{
+    MetaDataTable mdt;
+    mdt.addObject();
+    mdt.setValue(EMDL_IMAGE_NAME, std::string("test.mrcs"));
+    EXPECT_EQ(mdt.getString(EMDL_IMAGE_NAME, 0), "test.mrcs");
+}
+
+// ---------------------------------------------------------------------------
+// 20. getValueToString — returns string representation of a stored value
+// ---------------------------------------------------------------------------
+TEST(MetaDataTableTest, GetValueToString_RfloatAsString)
+{
+    MetaDataTable mdt;
+    mdt.addObject();
+    mdt.setValue(EMDL_CTF_DEFOCUSU, (RFLOAT)12345.0);
+    std::string str;
+    bool ok = mdt.getValueToString(EMDL_CTF_DEFOCUSU, str, 0);
+    EXPECT_TRUE(ok);
+    // String must represent the value 12345
+    EXPECT_NE(str.find("12345"), std::string::npos);
+}
+
+TEST(MetaDataTableTest, GetValueToString_StringLabel)
+{
+    MetaDataTable mdt;
+    mdt.addObject();
+    mdt.setValue(EMDL_IMAGE_NAME, std::string("particle.mrcs"));
+    std::string str;
+    bool ok = mdt.getValueToString(EMDL_IMAGE_NAME, str, 0);
+    EXPECT_TRUE(ok);
+    EXPECT_NE(str.find("particle.mrcs"), std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// 21. setIsList / isAList
+// ---------------------------------------------------------------------------
+TEST(MetaDataTableTest, Default_IsNotAList)
+{
+    MetaDataTable mdt;
+    EXPECT_FALSE(mdt.isAList());
+}
+
+TEST(MetaDataTableTest, SetIsList_True)
+{
+    MetaDataTable mdt;
+    mdt.setIsList(true);
+    EXPECT_TRUE(mdt.isAList());
+}
+
+TEST(MetaDataTableTest, SetIsList_False)
+{
+    MetaDataTable mdt;
+    mdt.setIsList(true);
+    mdt.setIsList(false);
+    EXPECT_FALSE(mdt.isAList());
+}
+
+// ---------------------------------------------------------------------------
+// 22. getVersion / setVersion / getCurrentVersion
+// ---------------------------------------------------------------------------
+TEST(MetaDataTableTest, GetVersionDefault)
+{
+    MetaDataTable mdt;
+    // Default version should equal getCurrentVersion()
+    EXPECT_EQ(mdt.getVersion(), MetaDataTable::getCurrentVersion());
+}
+
+TEST(MetaDataTableTest, SetGetVersion)
+{
+    MetaDataTable mdt;
+    mdt.setVersion(42);
+    EXPECT_EQ(mdt.getVersion(), 42);
+}
+
+TEST(MetaDataTableTest, GetCurrentVersion_IsPositive)
+{
+    EXPECT_GT(MetaDataTable::getCurrentVersion(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// 23. randomiseOrder — shuffles rows, count unchanged
+// ---------------------------------------------------------------------------
+TEST(MetaDataTableTest, RandomiseOrder_PreservesCount)
+{
+    MetaDataTable mdt = makeCTFTable(10);
+    mdt.randomiseOrder();
+    EXPECT_EQ(mdt.numberOfObjects(), (size_t)10);
+}
+
+TEST(MetaDataTableTest, RandomiseOrder_PreservesLabels)
+{
+    MetaDataTable mdt = makeCTFTable(5);
+    mdt.randomiseOrder();
+    // All rows must still have EMDL_CTF_DEFOCUSU
+    EXPECT_TRUE(mdt.containsLabel(EMDL_CTF_DEFOCUSU));
+}
+
+TEST(MetaDataTableTest, RandomiseOrder_PreservesValues)
+{
+    // Build table with unique values; after shuffle, sum must be same.
+    MetaDataTable mdt;
+    RFLOAT expected_sum = 0;
+    for (int i = 1; i <= 5; i++)
+    {
+        mdt.addObject();
+        mdt.setValue(EMDL_CTF_DEFOCUSU, (RFLOAT)(i * 1000.0));
+        expected_sum += i * 1000.0;
+    }
+    mdt.randomiseOrder();
+
+    RFLOAT actual_sum = 0;
+    FOR_ALL_OBJECTS_IN_METADATA_TABLE(mdt)
+    {
+        RFLOAT v = 0;
+        mdt.getValue(EMDL_CTF_DEFOCUSU, v);
+        actual_sum += v;
+    }
+    EXPECT_NEAR(actual_sum, expected_sum, 1e-3);
+}
+
+// ---------------------------------------------------------------------------
+// 24. newSort — string-based sort (by IMAGE_NAME)
+// ---------------------------------------------------------------------------
+TEST(MetaDataTableTest, NewSort_StringAscending)
+{
+    MetaDataTable mdt;
+    mdt.addObject();
+    mdt.setValue(EMDL_IMAGE_NAME, std::string("ccc.mrcs"));
+    mdt.addObject();
+    mdt.setValue(EMDL_IMAGE_NAME, std::string("aaa.mrcs"));
+    mdt.addObject();
+    mdt.setValue(EMDL_IMAGE_NAME, std::string("bbb.mrcs"));
+
+    mdt.newSort(EMDL_IMAGE_NAME);
+
+    std::string s0 = mdt.getString(EMDL_IMAGE_NAME, 0);
+    std::string s1 = mdt.getString(EMDL_IMAGE_NAME, 1);
+    std::string s2 = mdt.getString(EMDL_IMAGE_NAME, 2);
+    EXPECT_LT(s0, s1);
+    EXPECT_LT(s1, s2);
+}
+
+TEST(MetaDataTableTest, NewSort_StringDescending)
+{
+    MetaDataTable mdt;
+    mdt.addObject();
+    mdt.setValue(EMDL_IMAGE_NAME, std::string("aaa.mrcs"));
+    mdt.addObject();
+    mdt.setValue(EMDL_IMAGE_NAME, std::string("bbb.mrcs"));
+
+    mdt.newSort(EMDL_IMAGE_NAME, /*do_reverse=*/true);
+
+    std::string s0 = mdt.getString(EMDL_IMAGE_NAME, 0);
+    std::string s1 = mdt.getString(EMDL_IMAGE_NAME, 1);
+    EXPECT_GT(s0, s1);
+}
+
+// ---------------------------------------------------------------------------
+// 25. addMissingLabels — adds labels from another table that are absent
+// ---------------------------------------------------------------------------
+TEST(MetaDataTableTest, AddMissingLabels_AddsAbsentLabel)
+{
+    MetaDataTable src;
+    src.addObject();
+    src.setValue(EMDL_CTF_DEFOCUSU, (RFLOAT)1.0);
+    src.setValue(EMDL_CTF_VOLTAGE, (RFLOAT)300.0);
+
+    MetaDataTable dst;
+    dst.addObject();
+    dst.setValue(EMDL_CTF_DEFOCUSU, (RFLOAT)2.0);
+    // EMDL_CTF_VOLTAGE is absent from dst
+
+    dst.addMissingLabels(&src);
+
+    EXPECT_TRUE(dst.containsLabel(EMDL_CTF_VOLTAGE));
+}
+
+TEST(MetaDataTableTest, AddMissingLabels_ExistingLabelUnchanged)
+{
+    MetaDataTable src;
+    src.addObject();
+    src.setValue(EMDL_CTF_DEFOCUSU, (RFLOAT)999.0);
+
+    MetaDataTable dst;
+    dst.addObject();
+    dst.setValue(EMDL_CTF_DEFOCUSU, (RFLOAT)1.0);
+
+    dst.addMissingLabels(&src);
+
+    // EMDL_CTF_DEFOCUSU was already present; value must be unchanged
+    RFLOAT v = 0;
+    dst.getValue(EMDL_CTF_DEFOCUSU, v, 0);
+    EXPECT_NEAR(v, 1.0, 1e-6);
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 int main(int argc, char** argv)

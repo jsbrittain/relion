@@ -36,6 +36,7 @@
 #include <cmath>
 #include <cstring>
 #include "src/strings.h"
+#include "src/error.h"
 
 // ---------------------------------------------------------------------------
 // 1. removeChar()
@@ -532,6 +533,166 @@ TEST(StringsTest, TokenizeEmptyString)
     std::vector<std::string> tokens;
     tokenize("", tokens);
     EXPECT_TRUE(tokens.empty());
+}
+
+// ---------------------------------------------------------------------------
+// 21. textToInt()  — single char → int via ASCII offset (char - 48)
+// ---------------------------------------------------------------------------
+TEST(StringsTest, TextToIntDigitZero)
+{
+    EXPECT_EQ(textToInt("0"), 0);
+}
+
+TEST(StringsTest, TextToIntDigitFive)
+{
+    EXPECT_EQ(textToInt("5"), 5);
+}
+
+TEST(StringsTest, TextToIntDigitNine)
+{
+    EXPECT_EQ(textToInt("9"), 9);
+}
+
+// ---------------------------------------------------------------------------
+// 22. checkAngle() — validates angle type string
+// ---------------------------------------------------------------------------
+TEST(StringsTest, CheckAngleRot_DoesNotThrow)
+{
+    EXPECT_NO_THROW(checkAngle("rot"));
+}
+
+TEST(StringsTest, CheckAngleTilt_DoesNotThrow)
+{
+    EXPECT_NO_THROW(checkAngle("tilt"));
+}
+
+TEST(StringsTest, CheckAnglePsi_DoesNotThrow)
+{
+    EXPECT_NO_THROW(checkAngle("psi"));
+}
+
+TEST(StringsTest, CheckAngleInvalid_Throws)
+{
+    EXPECT_THROW(checkAngle("xyz"), RelionError);
+}
+
+TEST(StringsTest, CheckAngleEmpty_Throws)
+{
+    EXPECT_THROW(checkAngle(""), RelionError);
+}
+
+// ---------------------------------------------------------------------------
+// 23. firstToken / nextToken() — strtok-based C-API
+// ---------------------------------------------------------------------------
+TEST(StringsTest, FirstToken_ReturnsFirstWord)
+{
+    char buf[] = "hello world";
+    char* tok = firstToken(buf);
+    ASSERT_NE(tok, nullptr);
+    EXPECT_STREQ(tok, "hello");
+}
+
+TEST(StringsTest, NextToken_ReturnsSecondWord)
+{
+    char buf[] = "hello world";
+    firstToken(buf);
+    char* tok = nextToken();
+    ASSERT_NE(tok, nullptr);
+    EXPECT_STREQ(tok, "world");
+}
+
+TEST(StringsTest, NextToken_ReturnsNullAtEnd)
+{
+    char buf[] = "hello";
+    firstToken(buf);
+    char* tok = nextToken();
+    EXPECT_EQ(tok, nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// 24. nextToken(str, i) — index-advancing version
+// ---------------------------------------------------------------------------
+TEST(StringsTest, NextTokenByIndex_SingleWord)
+{
+    std::string s = "hello";
+    int i = 0;
+    std::string tok = nextToken(s, i);
+    // Token must start with "hello"
+    EXPECT_EQ(tok.find("hello"), (size_t)0);
+    EXPECT_GT(i, 0);
+}
+
+TEST(StringsTest, NextTokenByIndex_TwoWords)
+{
+    std::string s = "alpha beta";
+    int i = 0;
+    std::string tok1 = nextToken(s, i);
+    std::string tok2 = nextToken(s, i);
+    EXPECT_EQ(tok1.find("alpha"), (size_t)0);
+    EXPECT_EQ(tok2.find("beta"), (size_t)0);
+}
+
+TEST(StringsTest, NextTokenByIndex_EmptyAtEnd)
+{
+    std::string s = "x";
+    int i = 0;
+    nextToken(s, i);  // consume "x"
+    std::string tok = nextToken(s, i);
+    EXPECT_TRUE(tok.empty());
+}
+
+// ---------------------------------------------------------------------------
+// 25. nextTokenInSTAR — STAR file token parsing
+// ---------------------------------------------------------------------------
+TEST(StringsTest, NextTokenInSTAR_ReturnsFirstToken)
+{
+    std::string line = "12345.0 hello";
+    int i = 0;
+    std::string tok;
+    bool ok = nextTokenInSTAR(line, i, tok);
+    EXPECT_TRUE(ok);
+    EXPECT_EQ(tok, "12345.0");
+}
+
+TEST(StringsTest, NextTokenInSTAR_ReturnsFalseAtEnd)
+{
+    std::string line = "token";
+    int i = 0;
+    std::string tok;
+    nextTokenInSTAR(line, i, tok);  // consume "token"
+    bool ok = nextTokenInSTAR(line, i, tok);
+    EXPECT_FALSE(ok);
+}
+
+TEST(StringsTest, NextTokenInSTAR_QuotedString)
+{
+    // Quoted token should return contents without quotes
+    std::string line = "\"hello world\"";
+    int i = 0;
+    std::string tok;
+    bool ok = nextTokenInSTAR(line, i, tok);
+    EXPECT_TRUE(ok);
+    EXPECT_EQ(tok, "hello world");
+}
+
+// ---------------------------------------------------------------------------
+// 26. firstWord / nextWord — same as firstToken / nextToken but throw on empty
+// ---------------------------------------------------------------------------
+TEST(StringsTest, FirstWord_ReturnsFirstWord)
+{
+    std::string s = "alpha beta";
+    char* w = firstWord(s);
+    ASSERT_NE(w, nullptr);
+    EXPECT_STREQ(w, "alpha");
+}
+
+TEST(StringsTest, NextWord_ReturnsSecondWord)
+{
+    std::string s = "alpha beta";
+    firstWord(s);
+    char* w = nextWord();
+    ASSERT_NE(w, nullptr);
+    EXPECT_STREQ(w, "beta");
 }
 
 // ---------------------------------------------------------------------------
