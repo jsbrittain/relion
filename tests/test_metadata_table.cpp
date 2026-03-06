@@ -736,6 +736,240 @@ TEST(MetaDataTableTest, AddMissingLabels_ExistingLabelUnchanged)
 }
 
 // ---------------------------------------------------------------------------
+// 26. getIntMinusOne — returns stored int value minus one
+// ---------------------------------------------------------------------------
+TEST(MetaDataTableTest, GetIntMinusOne_ReturnsIntMinus1)
+{
+    MetaDataTable mdt;
+    mdt.addObject();
+    mdt.setValue(EMDL_MLMODEL_NR_CLASSES, 5);
+    EXPECT_EQ(mdt.getIntMinusOne(EMDL_MLMODEL_NR_CLASSES, 0), 4);
+}
+
+TEST(MetaDataTableTest, GetIntMinusOne_ZeroValue)
+{
+    MetaDataTable mdt;
+    mdt.addObject();
+    mdt.setValue(EMDL_MLMODEL_NR_CLASSES, 1);
+    EXPECT_EQ(mdt.getIntMinusOne(EMDL_MLMODEL_NR_CLASSES, 0), 0);
+}
+
+// ---------------------------------------------------------------------------
+// 27. getDouble — same as getRfloat but cast to double
+// ---------------------------------------------------------------------------
+TEST(MetaDataTableTest, GetDouble_ReturnsDoubleValue)
+{
+    MetaDataTable mdt;
+    mdt.addObject();
+    mdt.setValue(EMDL_CTF_DEFOCUSU, (RFLOAT)20000.0);
+    EXPECT_NEAR(mdt.getDouble(EMDL_CTF_DEFOCUSU, 0), 20000.0, 1e-3);
+}
+
+// ---------------------------------------------------------------------------
+// 28. getAngleInRad — converts stored degree value to radians
+// ---------------------------------------------------------------------------
+TEST(MetaDataTableTest, GetAngleInRad_ConvertsDegToRad)
+{
+    MetaDataTable mdt;
+    mdt.addObject();
+    // Store 180 degrees; expect π radians back
+    mdt.setValue(EMDL_CTF_DEFOCUS_ANGLE, (RFLOAT)180.0);
+    EXPECT_NEAR(mdt.getAngleInRad(EMDL_CTF_DEFOCUS_ANGLE, 0), M_PI, 1e-6);
+}
+
+TEST(MetaDataTableTest, GetAngleInRad_ZeroDegrees)
+{
+    MetaDataTable mdt;
+    mdt.addObject();
+    mdt.setValue(EMDL_CTF_DEFOCUS_ANGLE, (RFLOAT)0.0);
+    EXPECT_NEAR(mdt.getAngleInRad(EMDL_CTF_DEFOCUS_ANGLE, 0), 0.0, 1e-10);
+}
+
+// ---------------------------------------------------------------------------
+// 29. labelExists — alias for containsLabel
+// ---------------------------------------------------------------------------
+TEST(MetaDataTableTest, LabelExists_TrueAfterSetValue)
+{
+    MetaDataTable mdt;
+    mdt.addObject();
+    mdt.setValue(EMDL_CTF_VOLTAGE, (RFLOAT)300.0);
+    EXPECT_TRUE(mdt.labelExists(EMDL_CTF_VOLTAGE));
+}
+
+TEST(MetaDataTableTest, LabelExists_FalseForMissingLabel)
+{
+    MetaDataTable mdt;
+    mdt.addObject();
+    EXPECT_FALSE(mdt.labelExists(EMDL_CTF_VOLTAGE));
+}
+
+// ---------------------------------------------------------------------------
+// 30. setValueFromString — parses string to typed value
+// ---------------------------------------------------------------------------
+TEST(MetaDataTableTest, SetValueFromString_Rfloat)
+{
+    MetaDataTable mdt;
+    mdt.addObject();
+    mdt.addLabel(EMDL_CTF_DEFOCUSU);
+    EXPECT_TRUE(mdt.setValueFromString(EMDL_CTF_DEFOCUSU, "13500.0", 0));
+    EXPECT_NEAR(mdt.getRfloat(EMDL_CTF_DEFOCUSU, 0), 13500.0, 1e-2);
+}
+
+TEST(MetaDataTableTest, SetValueFromString_String)
+{
+    MetaDataTable mdt;
+    mdt.addObject();
+    mdt.addLabel(EMDL_IMAGE_NAME);
+    EXPECT_TRUE(mdt.setValueFromString(EMDL_IMAGE_NAME, "test_particle.mrcs", 0));
+    EXPECT_EQ(mdt.getString(EMDL_IMAGE_NAME, 0), "test_particle.mrcs");
+}
+
+TEST(MetaDataTableTest, SetValueFromString_Int)
+{
+    MetaDataTable mdt;
+    mdt.addObject();
+    mdt.addLabel(EMDL_MLMODEL_NR_CLASSES);
+    EXPECT_TRUE(mdt.setValueFromString(EMDL_MLMODEL_NR_CLASSES, "7", 0));
+    EXPECT_EQ(mdt.getInt(EMDL_MLMODEL_NR_CLASSES, 0), 7);
+}
+
+// ---------------------------------------------------------------------------
+// 31. reserve — does not crash and preserves existing rows
+// ---------------------------------------------------------------------------
+TEST(MetaDataTableTest, Reserve_DoesNotCrash)
+{
+    MetaDataTable mdt = makeCTFTable(3);
+    EXPECT_NO_THROW(mdt.reserve(100));
+    EXPECT_EQ(mdt.numberOfObjects(), (size_t)3);
+}
+
+// ---------------------------------------------------------------------------
+// goToObject
+// ---------------------------------------------------------------------------
+
+TEST(MetaDataTableTest, GoToObject_ReturnsObjectId)
+{
+    MetaDataTable mdt = makeCTFTable(3);
+    long result = mdt.goToObject(1);
+    EXPECT_EQ(result, 1L);
+}
+
+TEST(MetaDataTableTest, GoToObject_CurrentObjectIdUpdated)
+{
+    MetaDataTable mdt = makeCTFTable(3);
+    mdt.goToObject(2);
+    RFLOAT val;
+    mdt.getValue(EMDL_CTF_DEFOCUSU, val, -1);  // -1 uses current
+    EXPECT_NEAR(val, 12000.0, 1.0);
+}
+
+// ---------------------------------------------------------------------------
+// printLabels
+// ---------------------------------------------------------------------------
+
+TEST(MetaDataTableTest, PrintLabels_DoesNotCrash)
+{
+    MetaDataTable mdt = makeCTFTable(1);
+    std::ostringstream oss;
+    EXPECT_NO_THROW(mdt.printLabels(oss));
+}
+
+TEST(MetaDataTableTest, PrintLabels_ContainsLabelName)
+{
+    MetaDataTable mdt = makeCTFTable(1);
+    std::ostringstream oss;
+    mdt.printLabels(oss);
+    EXPECT_NE(oss.str().find("rlnDefocusU"), std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// addObject (no-arg) and addObject(MetaDataContainer*)
+// ---------------------------------------------------------------------------
+
+TEST(MetaDataTableTest, AddObjectNoArg_IncreasesCount)
+{
+    MetaDataTable mdt = makeCTFTable(2);
+    size_t n_before = mdt.numberOfObjects();
+    mdt.addObject();
+    EXPECT_EQ(mdt.numberOfObjects(), n_before + 1);
+}
+
+// ---------------------------------------------------------------------------
+// subsetMetaDataTable (RFLOAT range)
+// ---------------------------------------------------------------------------
+
+TEST(MetaDataTableTest, SubsetByRange_CorrectCount)
+{
+    MetaDataTable mdt = makeCTFTable(5);  // defocusU: 10000, 11000, 12000, 13000, 14000
+    MetaDataTable sub = subsetMetaDataTable(mdt, EMDL_CTF_DEFOCUSU, 11000.0, 13000.0);
+    EXPECT_EQ(sub.numberOfObjects(), (size_t)3);  // 11000, 12000, 13000
+}
+
+TEST(MetaDataTableTest, SubsetByRange_EmptyResult)
+{
+    MetaDataTable mdt = makeCTFTable(3);
+    MetaDataTable sub = subsetMetaDataTable(mdt, EMDL_CTF_DEFOCUSU, 99000.0, 99999.0);
+    EXPECT_EQ(sub.numberOfObjects(), (size_t)0);
+}
+
+TEST(MetaDataTableTest, SubsetByRange_AllRows)
+{
+    MetaDataTable mdt = makeCTFTable(3);
+    MetaDataTable sub = subsetMetaDataTable(mdt, EMDL_CTF_DEFOCUSU, 0.0, 99999.0);
+    EXPECT_EQ(sub.numberOfObjects(), (size_t)3);
+}
+
+// ---------------------------------------------------------------------------
+// subsetMetaDataTable (string search)
+// ---------------------------------------------------------------------------
+
+TEST(MetaDataTableTest, SubsetByString_Include_CorrectCount)
+{
+    MetaDataTable mdt = makeCTFTable(4);  // particle_0, particle_1, particle_2, particle_3
+    MetaDataTable sub = subsetMetaDataTable(mdt, EMDL_IMAGE_NAME, std::string("particle_1"), false);
+    EXPECT_EQ(sub.numberOfObjects(), (size_t)1);
+}
+
+TEST(MetaDataTableTest, SubsetByString_Exclude_CorrectCount)
+{
+    MetaDataTable mdt = makeCTFTable(4);
+    MetaDataTable sub = subsetMetaDataTable(mdt, EMDL_IMAGE_NAME, std::string("particle_0"), true);
+    EXPECT_EQ(sub.numberOfObjects(), (size_t)3);
+}
+
+// ---------------------------------------------------------------------------
+// newSort with DOUBLE and INT labels (exercises MdDoubleComparator/MdIntComparator)
+// ---------------------------------------------------------------------------
+
+TEST(MetaDataTableTest, NewSort_DoubleDescending)
+{
+    MetaDataTable mdt;
+    for (int i = 0; i < 4; i++)
+    {
+        mdt.addObject();
+        mdt.setValue(EMDL_CTF_DEFOCUSU, (RFLOAT)(i * 1000.0));
+    }
+    mdt.newSort(EMDL_CTF_DEFOCUSU, /*descend=*/true);
+    RFLOAT first;
+    mdt.getValue(EMDL_CTF_DEFOCUSU, first, 0);
+    EXPECT_NEAR(first, 3000.0, 1.0);
+}
+
+TEST(MetaDataTableTest, NewSort_IntAscending)
+{
+    MetaDataTable mdt;
+    for (int i = 3; i >= 0; i--)
+    {
+        mdt.addObject();
+        mdt.setValue(EMDL_MLMODEL_NR_CLASSES, i);
+    }
+    mdt.newSort(EMDL_MLMODEL_NR_CLASSES, /*descend=*/false);
+    int first;
+    mdt.getValue(EMDL_MLMODEL_NR_CLASSES, first, 0);
+    EXPECT_EQ(first, 0);
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 int main(int argc, char** argv)

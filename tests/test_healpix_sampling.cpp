@@ -565,6 +565,269 @@ TEST(HealpixSamplingOrientationsTest, GetOrientations_OverSampled_MorePoints)
 }
 
 // ---------------------------------------------------------------------------
+// resetRandomlyPerturbedSampling
+// ---------------------------------------------------------------------------
+
+TEST(HealpixSamplingPerturbTest, ResetRandom_DoesNotCrash)
+{
+    HealpixSampling s = make3D(1);
+    s.perturbation_factor = 0.5;
+    s.random_perturbation = 0.0;
+    init_random_generator(42);
+    s.resetRandomlyPerturbedSampling();
+    SUCCEED();
+}
+
+TEST(HealpixSamplingPerturbTest, ResetRandom_BoundsRandomPerturbation)
+{
+    HealpixSampling s = make3D(1);
+    s.perturbation_factor = 0.5;
+    s.random_perturbation = 0.0;
+    init_random_generator(7);
+    s.resetRandomlyPerturbedSampling();
+    EXPECT_GE(s.random_perturbation, -s.perturbation_factor);
+    EXPECT_LE(s.random_perturbation,  s.perturbation_factor);
+}
+
+// ---------------------------------------------------------------------------
+// getHealPixIndex
+// ---------------------------------------------------------------------------
+
+TEST(HealpixSamplingHealPixIndexTest, GetHealPixIndex_ReturnsStoredIndex)
+{
+    HealpixSampling s = make3D(1);
+    // addOneOrientation stores -1 as placeholder for ipix
+    s.addOneOrientation(0., 0., 0., true);
+    EXPECT_EQ(s.getHealPixIndex(0), -1L);
+}
+
+// ---------------------------------------------------------------------------
+// getDirectionFromHealPix
+// ---------------------------------------------------------------------------
+
+TEST(HealpixSamplingHealPixDirTest, GetDirectionFromHealPix_AnglesInRange)
+{
+    HealpixSampling s = make3D(1);
+    RFLOAT rot = 999., tilt = 999.;
+    s.getDirectionFromHealPix(0, rot, tilt);
+    EXPECT_GE(tilt, 0.0);
+    EXPECT_LE(tilt, 180.0);
+    EXPECT_GE(rot, -180.0);
+    EXPECT_LE(rot,  180.0);
+}
+
+TEST(HealpixSamplingHealPixDirTest, GetDirectionFromHealPix_DifferentPixels)
+{
+    HealpixSampling s = make3D(2);
+    RFLOAT rot0, tilt0, rot1, tilt1;
+    s.getDirectionFromHealPix(0, rot0, tilt0);
+    s.getDirectionFromHealPix(1, rot1, tilt1);
+    EXPECT_FALSE(rot0 == rot1 && tilt0 == tilt1);
+}
+
+// ---------------------------------------------------------------------------
+// getHelicalTranslationalSampling
+// ---------------------------------------------------------------------------
+
+TEST(HealpixSamplingHelicalTest, GetHelicalTranslationalSampling_MatchesStep)
+{
+    HealpixSampling s = make2D(-1.0, 2.0, 5.0);
+    s.helical_offset_step = 4.0;
+    EXPECT_NEAR(s.getHelicalTranslationalSampling(0), 4.0, 1e-10);
+    EXPECT_NEAR(s.getHelicalTranslationalSampling(1), 2.0, 1e-10);
+    EXPECT_NEAR(s.getHelicalTranslationalSampling(2), 1.0, 1e-10);
+}
+
+// ---------------------------------------------------------------------------
+// getPositionSamplingPoint
+// ---------------------------------------------------------------------------
+
+TEST(HealpixSamplingPosSamplingTest, GetPositionSamplingPoint_ZeroIndices)
+{
+    HealpixSampling s = make3D(1);
+    s.addOneOrientation(0., 0., 0., true);   // 1 dir, 1 psi, 1 trans
+    EXPECT_EQ(s.getPositionSamplingPoint(0, 0, 0, 0), 0L);
+}
+
+TEST(HealpixSamplingPosSamplingTest, GetPositionSamplingPoint_OffsetByItrans)
+{
+    // With multiple translations, consecutive itrans values differ by 1
+    HealpixSampling s = make2D(-1.0, 1.0, 2.0);
+    long int p0 = s.getPositionSamplingPoint(0, 0, 0, 0);
+    long int p1 = s.getPositionSamplingPoint(0, 0, 0, 1);
+    EXPECT_EQ(p1 - p0, 1L);
+}
+
+// ---------------------------------------------------------------------------
+// getPositionOversampledSamplingPoint
+// ---------------------------------------------------------------------------
+
+TEST(HealpixSamplingPosOversampledTest, OrderZero_ReturnsIpos)
+{
+    HealpixSampling s = make3D(1);
+    EXPECT_EQ(s.getPositionOversampledSamplingPoint(5, 0, 0, 0), 5L);
+    EXPECT_EQ(s.getPositionOversampledSamplingPoint(0, 0, 2, 3), 0L);
+}
+
+TEST(HealpixSamplingPosOversampledTest, OrderOne_ScalesCorrectly)
+{
+    HealpixSampling s = make3D(1);
+    int or_factor = s.oversamplingFactorOrientations(1);  // 8 for 3D
+    int tr_factor = s.oversamplingFactorTranslations(1);  // 1 for zero-range
+    long int result = s.getPositionOversampledSamplingPoint(2, 1, 0, 0);
+    EXPECT_EQ(result, 2L * or_factor * tr_factor);
+}
+
+// ---------------------------------------------------------------------------
+// getTranslationsInPixel
+// ---------------------------------------------------------------------------
+
+TEST(HealpixSamplingTransInPixelTest, OrderZero_SingleTranslation)
+{
+    HealpixSampling s = make2D(-1.0, 2.0, 0.0);  // 1 translation at (0,0)
+    std::vector<RFLOAT> tx, ty, tz;
+    s.getTranslationsInPixel(0, 0, 1.0, tx, ty, tz);
+    ASSERT_EQ(tx.size(), (size_t)1);
+    EXPECT_NEAR(tx[0], 0.0, 1e-10);
+    EXPECT_NEAR(ty[0], 0.0, 1e-10);
+}
+
+TEST(HealpixSamplingTransInPixelTest, Oversampled_MoreTranslations)
+{
+    HealpixSampling s = make2D(-1.0, 2.0, 0.0);
+    std::vector<RFLOAT> tx0, ty0, tz0, tx1, ty1, tz1;
+    s.getTranslationsInPixel(0, 0, 1.0, tx0, ty0, tz0);
+    s.getTranslationsInPixel(0, 1, 1.0, tx1, ty1, tz1);
+    EXPECT_GT(tx1.size(), tx0.size());
+}
+
+// ---------------------------------------------------------------------------
+// setOrientations with limit_tilt exercises removePointsOutsideLimitedTiltAngles
+// ---------------------------------------------------------------------------
+
+TEST(HealpixSamplingRemoveTest, SetOrientations_LimitTilt_FewDirections)
+{
+    // With limit_tilt=45 only directions with |tilt|>=45 are kept.
+    // We need symmetry matrices initialised before calling setOrientations directly.
+    HealpixSampling s;
+    s.clear();
+    s.is_3D          = true;
+    s.psi_step       = 30.0;
+    s.healpix_order  = 1;
+    s.fn_sym         = "C1";
+    s.limit_tilt     = 45.;
+    s.isRelax        = false;
+    s.initialiseSymMats("C1", s.pgGroup, s.pgOrder, s.R_repository, s.L_repository);
+    s.setOrientations(1, 30.0);
+
+    long int nd_limited = s.NrDirections();
+    EXPECT_GT(nd_limited, 0L);
+
+    // Without limit_tilt the count is >= limited count
+    HealpixSampling s2;
+    s2.clear();
+    s2.is_3D         = true;
+    s2.psi_step      = 30.0;
+    s2.healpix_order = 1;
+    s2.fn_sym        = "C1";
+    s2.limit_tilt    = 91.;  // ABS(91) >= 90 → block skipped, all directions kept
+    s2.isRelax       = false;
+    s2.initialiseSymMats("C1", s2.pgGroup, s2.pgOrder, s2.R_repository, s2.L_repository);
+    s2.setOrientations(1, 30.0);
+
+    EXPECT_GE(s2.NrDirections(), nd_limited);
+}
+
+// ---------------------------------------------------------------------------
+// setOrientations (2D path)
+// ---------------------------------------------------------------------------
+
+TEST(HealpixSamplingSetOrientationsTest, SetOrientations_2D_PopulatesPsi)
+{
+    // 2D path of setOrientations doesn't call removeSymmetryEquivalentPoints,
+    // so no need to pre-initialise symmetry matrices.
+    HealpixSampling s;
+    s.clear();
+    s.is_3D      = false;
+    s.psi_step   = 15.0;
+    s.healpix_order = 1;
+    s.fn_sym     = "C1";
+    s.limit_tilt = 0.;
+    s.isRelax    = false;
+    s.setOrientations(-1, 15.0);
+    // 360/15 = 24 psi angles; 1 direction for 2D
+    EXPECT_EQ(s.NrPsiSamplings(), 24L);
+    EXPECT_EQ(s.NrDirections(),    1L);
+}
+
+TEST(HealpixSamplingSetOrientationsTest, SetOrientations_2D_DifferentStep)
+{
+    HealpixSampling s;
+    s.clear();
+    s.is_3D      = false;
+    s.psi_step   = 10.0;
+    s.healpix_order = 1;
+    s.fn_sym     = "C1";
+    s.limit_tilt = 0.;
+    s.isRelax    = false;
+    s.setOrientations(-1, 10.0);
+    EXPECT_EQ(s.NrPsiSamplings(), 36L);
+}
+
+// ---------------------------------------------------------------------------
+// addOneTranslation
+// ---------------------------------------------------------------------------
+
+TEST(HealpixSamplingAddTranslationTest, AddOneTranslation_IncreasesCount)
+{
+    HealpixSampling s = make3D(1, 1.0, 2.0);
+    long n_before = s.NrTranslationalSamplings();
+    s.addOneTranslation(1.0, 2.0, 3.0);
+    EXPECT_EQ(s.NrTranslationalSamplings(), n_before + 1);
+}
+
+TEST(HealpixSamplingAddTranslationTest, AddOneTranslation_WithClear_ResetsToOne)
+{
+    HealpixSampling s = make3D(1, 1.0, 2.0);
+    s.addOneTranslation(1.0, 2.0, 3.0, /*do_clear=*/true);
+    EXPECT_EQ(s.NrTranslationalSamplings(), 1L);
+}
+
+TEST(HealpixSamplingAddTranslationTest, AddOneTranslation_2D_DoesNotCrash)
+{
+    HealpixSampling s = make2D();
+    EXPECT_NO_THROW(s.addOneTranslation(1.0, 2.0, 0.0));
+}
+
+// ---------------------------------------------------------------------------
+// calculateDeltaRot
+// ---------------------------------------------------------------------------
+
+TEST(HealpixSamplingCalcDeltaRotTest, ZeroRotPrior_ReturnsAngleFromYAxis)
+{
+    HealpixSampling s = make3D();
+    // Direction along X axis
+    Matrix1D<RFLOAT> dir(3);
+    VEC_ELEM(dir, 0) = 1.0;
+    VEC_ELEM(dir, 1) = 0.0;
+    VEC_ELEM(dir, 2) = 0.0;
+    RFLOAT delta = s.calculateDeltaRot(dir, 0.0);
+    // Along X, component along Y-axis after 0 rotation is 0
+    EXPECT_NEAR(delta, 0.0, 1e-6);
+}
+
+TEST(HealpixSamplingCalcDeltaRotTest, DirectionAlongY_Returns90Degrees)
+{
+    HealpixSampling s = make3D();
+    Matrix1D<RFLOAT> dir(3);
+    VEC_ELEM(dir, 0) = 0.0;
+    VEC_ELEM(dir, 1) = 1.0;
+    VEC_ELEM(dir, 2) = 0.0;
+    RFLOAT delta = s.calculateDeltaRot(dir, 0.0);
+    EXPECT_NEAR(delta, 90.0, 1e-4);
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 

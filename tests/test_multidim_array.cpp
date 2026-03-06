@@ -37,7 +37,9 @@
  */
 
 #include <gtest/gtest.h>
+#include <sstream>
 #include "src/multidim_array.h"
+#include "src/complex.h"
 
 // Convenience: use double throughout so arithmetic comparisons are clean.
 using Array1D = MultidimArray<double>;
@@ -541,6 +543,377 @@ TEST(MultidimArrayTest, InitZerosFromPattern)
 
     for (long int n = 0; n < NZYXSIZE(a); ++n)
         EXPECT_EQ(DIRECT_MULTIDIM_ELEM(a, n), 0.0);
+}
+
+// ---------------------------------------------------------------------------
+// resize for non-double types
+// ---------------------------------------------------------------------------
+
+TEST(MultidimArrayTest, BoolResize1D)
+{
+    MultidimArray<bool> a;
+    a.resize(5);
+    EXPECT_EQ(XSIZE(a), 5);
+    EXPECT_EQ(YSIZE(a), 1);
+    EXPECT_EQ(ZSIZE(a), 1);
+}
+
+TEST(MultidimArrayTest, BoolResize4D)
+{
+    MultidimArray<bool> a;
+    a.resize(2, 3, 4, 5);
+    EXPECT_EQ(NSIZE(a), 2);
+    EXPECT_EQ(ZSIZE(a), 3);
+    EXPECT_EQ(YSIZE(a), 4);
+    EXPECT_EQ(XSIZE(a), 5);
+}
+
+TEST(MultidimArrayTest, FloatResize4D)
+{
+    MultidimArray<float> a;
+    a.resize(2, 3, 4, 5);
+    EXPECT_EQ(NSIZE(a), 2);
+    EXPECT_EQ(XSIZE(a), 5);
+}
+
+TEST(MultidimArrayTest, IntResize2D)
+{
+    MultidimArray<int> a;
+    a.resize(3, 4);
+    EXPECT_EQ(YSIZE(a), 3);
+    EXPECT_EQ(XSIZE(a), 4);
+}
+
+TEST(MultidimArrayTest, IntResize3D)
+{
+    MultidimArray<int> a;
+    a.resize(2, 3, 4);
+    EXPECT_EQ(ZSIZE(a), 2);
+    EXPECT_EQ(YSIZE(a), 3);
+    EXPECT_EQ(XSIZE(a), 4);
+}
+
+TEST(MultidimArrayTest, IntResizeFromPattern)
+{
+    MultidimArray<int> src;
+    src.resize(3, 4);
+    MultidimArray<int> dst;
+    dst.resize(src);
+    EXPECT_EQ(YSIZE(dst), 3);
+    EXPECT_EQ(XSIZE(dst), 4);
+}
+
+TEST(MultidimArrayTest, FloatResizeFromPattern)
+{
+    MultidimArray<float> src;
+    src.resize(3, 4);
+    MultidimArray<float> dst;
+    dst.resize(src);
+    EXPECT_EQ(YSIZE(dst), 3);
+    EXPECT_EQ(XSIZE(dst), 4);
+}
+
+// ---------------------------------------------------------------------------
+// window operations
+// ---------------------------------------------------------------------------
+
+TEST(MultidimArrayTest, Window2D_InPlace_CropsCorrectly)
+{
+    MultidimArray<RFLOAT> a;
+    a.resize(8, 8);
+    FOR_ALL_DIRECT_ELEMENTS_IN_ARRAY2D(a)
+        DIRECT_A2D_ELEM(a, i, j) = static_cast<RFLOAT>(i * 8 + j);
+
+    // Pass explicit init_value to disambiguate from 1D overload
+    a.window(2, 2, 5, 5, 0.0);
+    EXPECT_EQ((int)YSIZE(a), 4);
+    EXPECT_EQ((int)XSIZE(a), 4);
+}
+
+TEST(MultidimArrayTest, Window2D_IntoOutput_CorrectSize)
+{
+    MultidimArray<RFLOAT> src, dst;
+    src.resize(8, 8);
+    FOR_ALL_DIRECT_ELEMENTS_IN_ARRAY2D(src)
+        DIRECT_A2D_ELEM(src, i, j) = 1.0;
+
+    src.window(dst, 1, 1, 4, 4, 0.0);
+    EXPECT_EQ((int)YSIZE(dst), 4);
+    EXPECT_EQ((int)XSIZE(dst), 4);
+}
+
+TEST(MultidimArrayTest, Window3D_InPlace_CropsCorrectly)
+{
+    MultidimArray<RFLOAT> a;
+    a.resize(8, 8, 8);
+    a.initConstant(1.0);
+
+    // Pass explicit init_value to disambiguate from 2D overload
+    a.window(1, 1, 1, 4, 4, 4, 0.0);
+    EXPECT_EQ((int)ZSIZE(a), 4);
+    EXPECT_EQ((int)YSIZE(a), 4);
+    EXPECT_EQ((int)XSIZE(a), 4);
+}
+
+TEST(MultidimArrayTest, Window3D_IntoOutput_CorrectSize)
+{
+    MultidimArray<RFLOAT> src, dst;
+    src.resize(8, 8, 8);
+    src.initConstant(1.0);
+
+    src.window(dst, 0, 0, 0, 3, 3, 3, 0.0);
+    EXPECT_EQ((int)ZSIZE(dst), 4);
+    EXPECT_EQ((int)YSIZE(dst), 4);
+    EXPECT_EQ((int)XSIZE(dst), 4);
+}
+
+// ---------------------------------------------------------------------------
+// printShape
+// ---------------------------------------------------------------------------
+
+TEST(MultidimArrayTest, PrintShape_DoesNotCrash)
+{
+    MultidimArray<RFLOAT> a;
+    a.resize(4, 4);
+    std::ostringstream oss;
+    EXPECT_NO_THROW(a.printShape(oss));
+}
+
+TEST(MultidimArrayTest, PrintShape_Complex_DoesNotCrash)
+{
+    MultidimArray<Complex> a;
+    a.resize(4, 4);
+    std::ostringstream oss;
+    EXPECT_NO_THROW(a.printShape(oss));
+}
+
+// ---------------------------------------------------------------------------
+// checkDimension
+// ---------------------------------------------------------------------------
+
+TEST(MultidimArrayTest, CheckDimension_CorrectDimDoesNotThrow)
+{
+    MultidimArray<RFLOAT> a;
+    a.resize(4, 4);
+    EXPECT_NO_THROW(a.checkDimension(2));
+}
+
+TEST(MultidimArrayTest, CheckDimension_WrongDimExits)
+{
+    MultidimArray<RFLOAT> a;
+    a.resize(4, 4);
+    EXPECT_DEATH(a.checkDimension(3), "");
+}
+
+// ---------------------------------------------------------------------------
+// rowNumber / colNumber
+// ---------------------------------------------------------------------------
+
+TEST(MultidimArrayTest, RowNumber_2D)
+{
+    MultidimArray<RFLOAT> a;
+    a.resize(3, 5);
+    EXPECT_EQ(a.rowNumber(), 3);
+}
+
+TEST(MultidimArrayTest, ColNumber_2D)
+{
+    MultidimArray<RFLOAT> a;
+    a.resize(3, 5);
+    EXPECT_EQ(a.colNumber(), 5);
+}
+
+// ---------------------------------------------------------------------------
+// setXmippOrigin for float
+// ---------------------------------------------------------------------------
+
+TEST(MultidimArrayTest, FloatSetXmippOrigin_SetsNegativeStart)
+{
+    MultidimArray<float> a;
+    a.resize(8, 8);
+    a.setXmippOrigin();
+    EXPECT_LT(STARTINGX(a), 0);
+    EXPECT_LT(STARTINGY(a), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Complex operator()(long, long) const
+// ---------------------------------------------------------------------------
+
+TEST(MultidimArrayTest, ComplexTwoIndexAccess)
+{
+    MultidimArray<Complex> a;
+    a.resize(4, 4);
+    a.setXmippOrigin();
+    A2D_ELEM(a, 1, 1) = Complex(2.5, 3.5);
+    const MultidimArray<Complex>& ca = a;
+    Complex val = ca(1, 1);
+    EXPECT_NEAR(val.real, 2.5, 1e-6);
+    EXPECT_NEAR(val.imag, 3.5, 1e-6);
+}
+
+// ---------------------------------------------------------------------------
+// getImage / setSlice
+// ---------------------------------------------------------------------------
+
+TEST(MultidimArrayTest, GetImage_ExtractsCorrectSlice)
+{
+    MultidimArray<RFLOAT> vol4d;
+    vol4d.resize(2, 1, 4, 4);
+    // Set image 1 (second image) to 5.0
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++)
+            DIRECT_NZYX_ELEM(vol4d, 1, 0, i, j) = 5.0;
+
+    MultidimArray<RFLOAT> img;
+    vol4d.getImage(1, img);
+    EXPECT_NEAR(DIRECT_A2D_ELEM(img, 0, 0), 5.0, 1e-6);
+}
+
+TEST(MultidimArrayTest, SetSlice_UpdatesCorrectLayer)
+{
+    MultidimArray<RFLOAT> vol;
+    vol.resize(4, 4, 4);
+    vol.initZeros();
+
+    MultidimArray<RFLOAT> slice;
+    slice.resize(4, 4);
+    slice.initConstant(7.0);
+
+    vol.setSlice(1, slice);
+    EXPECT_NEAR(DIRECT_A3D_ELEM(vol, 1, 0, 0), 7.0, 1e-6);
+    EXPECT_NEAR(DIRECT_A3D_ELEM(vol, 0, 0, 0), 0.0, 1e-6);
+}
+
+// ---------------------------------------------------------------------------
+// computeDoubleMinMax / computeStddev
+// ---------------------------------------------------------------------------
+
+TEST(MultidimArrayTest, ComputeDoubleMinMax_CorrectRange)
+{
+    MultidimArray<RFLOAT> a;
+    a.resize(4);
+    DIRECT_A1D_ELEM(a, 0) = 3.0;
+    DIRECT_A1D_ELEM(a, 1) = 1.0;
+    DIRECT_A1D_ELEM(a, 2) = 4.0;
+    DIRECT_A1D_ELEM(a, 3) = 1.5;
+
+    double mn, mx;
+    a.computeDoubleMinMax(mn, mx);
+    EXPECT_NEAR(mn, 1.0, 1e-6);
+    EXPECT_NEAR(mx, 4.0, 1e-6);
+}
+
+TEST(MultidimArrayTest, ComputeStddev_ConstantArray_IsZero)
+{
+    MultidimArray<RFLOAT> a;
+    a.resize(4);
+    a.initConstant(3.0);
+    EXPECT_NEAR(a.computeStddev(), 0.0, 1e-6);
+}
+
+TEST(MultidimArrayTest, ComputeStddev_NonConstant_IsPositive)
+{
+    MultidimArray<RFLOAT> a;
+    a.resize(4);
+    DIRECT_A1D_ELEM(a, 0) = 1.0;
+    DIRECT_A1D_ELEM(a, 1) = 2.0;
+    DIRECT_A1D_ELEM(a, 2) = 3.0;
+    DIRECT_A1D_ELEM(a, 3) = 4.0;
+    EXPECT_GT(a.computeStddev(), 0.0);
+}
+
+// ---------------------------------------------------------------------------
+// Complex in-place arithmetic
+// ---------------------------------------------------------------------------
+
+TEST(MultidimArrayTest, ComplexInPlaceAdd)
+{
+    MultidimArray<Complex> a, b;
+    a.resize(4);
+    b.resize(4);
+    FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(a)
+    {
+        DIRECT_MULTIDIM_ELEM(a, n) = Complex(1.0, 0.0);
+        DIRECT_MULTIDIM_ELEM(b, n) = Complex(2.0, 1.0);
+    }
+    a += b;
+    EXPECT_NEAR(DIRECT_MULTIDIM_ELEM(a, 0).real, 3.0, 1e-6);
+    EXPECT_NEAR(DIRECT_MULTIDIM_ELEM(a, 0).imag, 1.0, 1e-6);
+}
+
+TEST(MultidimArrayTest, ComplexInPlaceSubtract)
+{
+    MultidimArray<Complex> a, b;
+    a.resize(4);
+    b.resize(4);
+    FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(a)
+    {
+        DIRECT_MULTIDIM_ELEM(a, n) = Complex(5.0, 3.0);
+        DIRECT_MULTIDIM_ELEM(b, n) = Complex(1.0, 1.0);
+    }
+    a -= b;
+    EXPECT_NEAR(DIRECT_MULTIDIM_ELEM(a, 0).real, 4.0, 1e-6);
+    EXPECT_NEAR(DIRECT_MULTIDIM_ELEM(a, 0).imag, 2.0, 1e-6);
+}
+
+// ---------------------------------------------------------------------------
+// RFLOAT in-place scalar addition
+// ---------------------------------------------------------------------------
+
+TEST(MultidimArrayTest, ScalarInPlaceAdd)
+{
+    MultidimArray<RFLOAT> a;
+    a.resize(4);
+    a.initConstant(2.0);
+    a += 3.0;
+    FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(a)
+        EXPECT_NEAR(DIRECT_MULTIDIM_ELEM(a, n), 5.0, 1e-6);
+}
+
+// ---------------------------------------------------------------------------
+// cross-type resize (resize<T2>(MultidimArray<T2>))
+// ---------------------------------------------------------------------------
+
+TEST(MultidimArrayTest, ResizeFromBoolPattern)
+{
+    MultidimArray<bool> src;
+    src.resize(3, 4);
+    MultidimArray<RFLOAT> dst;
+    dst.resize(src);  // cross-type: resize<bool>(MultidimArray<bool>)
+    EXPECT_EQ((int)YSIZE(dst), 3);
+    EXPECT_EQ((int)XSIZE(dst), 4);
+}
+
+TEST(MultidimArrayTest, ComplexResizeFromRfloatPattern)
+{
+    MultidimArray<RFLOAT> src;
+    src.resize(3, 4);
+    MultidimArray<Complex> dst;
+    dst.resize(src);  // resize<RFLOAT>(MultidimArray<RFLOAT>)
+    EXPECT_EQ((int)YSIZE(dst), 3);
+    EXPECT_EQ((int)XSIZE(dst), 4);
+}
+
+// ---------------------------------------------------------------------------
+// cross-type sameShape
+// ---------------------------------------------------------------------------
+
+TEST(MultidimArrayTest, SameShape_IntVsDouble_SameSize)
+{
+    MultidimArray<int> a;
+    MultidimArray<RFLOAT> b;
+    a.resize(4, 4);
+    b.resize(4, 4);
+    EXPECT_TRUE(a.sameShape(b));
+}
+
+TEST(MultidimArrayTest, SameShape_FloatVsFloat_SameSize)
+{
+    MultidimArray<float> a, b;
+    a.resize(4, 4);
+    b.resize(4, 4);
+    EXPECT_TRUE(a.sameShape(b));
 }
 
 // ---------------------------------------------------------------------------

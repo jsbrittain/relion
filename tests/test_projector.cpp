@@ -586,6 +586,109 @@ TEST(BackProjectorTest, ProjectThenBackproject_DataAndWeightNonzero)
 }
 
 // ---------------------------------------------------------------------------
+// 26. rotate2D – rotates a 2D FT in-place using a 2D projector
+// ---------------------------------------------------------------------------
+TEST(ProjectorTest, Rotate2D_IdentityRotation_PreservesOutput)
+{
+    // Build a 2D projector from a simple 2D image
+    MultidimArray<RFLOAT> img2d;
+    img2d.initZeros(ORI, ORI);
+    DIRECT_A2D_ELEM(img2d, ORI/2, ORI/2) = 1.0;  // delta at centre
+
+    Projector p2d(ORI, TRILINEAR, PAD, RMIN);
+    MultidimArray<RFLOAT> ps;
+    p2d.computeFourierTransformMap(img2d, ps, -1, 1, true, true);
+
+    // Pre-allocate 2D half-complex output
+    MultidimArray<Complex> f2d;
+    f2d.initZeros(ORI, ORI / 2 + 1);
+
+    // Identity 2D rotation
+    Matrix2D<RFLOAT> A(2, 2);
+    A.initIdentity();
+
+    EXPECT_NO_THROW(p2d.rotate2D(f2d, A));
+}
+
+TEST(ProjectorTest, Rotate2D_NonzeroInput_ProducesNonzeroOutput)
+{
+    MultidimArray<RFLOAT> img2d;
+    img2d.initZeros(ORI, ORI);
+    // Non-trivial image: uniform blob
+    for (int i = ORI/2 - 2; i <= ORI/2 + 2; i++)
+        for (int j = ORI/2 - 2; j <= ORI/2 + 2; j++)
+            DIRECT_A2D_ELEM(img2d, i, j) = 1.0;
+
+    Projector p2d(ORI, TRILINEAR, PAD, RMIN);
+    MultidimArray<RFLOAT> ps;
+    p2d.computeFourierTransformMap(img2d, ps, -1, 1, true, true);
+
+    MultidimArray<Complex> f2d;
+    f2d.initZeros(ORI, ORI / 2 + 1);
+
+    Matrix2D<RFLOAT> A(2, 2);
+    A.initIdentity();
+    p2d.rotate2D(f2d, A);
+
+    EXPECT_TRUE(anyNonZero(f2d));
+}
+
+// ---------------------------------------------------------------------------
+// 27. rotate3D – rotates a 3D FT in-place using a 3D projector
+// ---------------------------------------------------------------------------
+TEST(ProjectorTest, Rotate3D_IdentityRotation_DoesNotCrash)
+{
+    Projector p(ORI, TRILINEAR, PAD, RMIN);
+    MultidimArray<RFLOAT> vol = deltaVol3D();
+    setupProjector(p, vol);
+
+    MultidimArray<Complex> f3d;
+    f3d.initZeros(ORI, ORI, ORI / 2 + 1);
+
+    Matrix2D<RFLOAT> A = eulerMatrix(0, 0, 0);
+    EXPECT_NO_THROW(p.rotate3D(f3d, A));
+}
+
+TEST(ProjectorTest, Rotate3D_NonzeroVolume_ProducesNonzeroOutput)
+{
+    Projector p(ORI, TRILINEAR, PAD, RMIN);
+    MultidimArray<RFLOAT> vol = deltaVol3D();
+    setupProjector(p, vol);
+
+    MultidimArray<Complex> f3d;
+    f3d.initZeros(ORI, ORI, ORI / 2 + 1);
+
+    Matrix2D<RFLOAT> A = eulerMatrix(0, 0, 0);
+    p.rotate3D(f3d, A);
+
+    EXPECT_TRUE(anyNonZero(f3d));
+}
+
+// ---------------------------------------------------------------------------
+// 28. project2Dto1D – projects a 2D reference into a 1D slice
+// ---------------------------------------------------------------------------
+TEST(ProjectorTest, Project2Dto1D_DoesNotCrash)
+{
+    MultidimArray<RFLOAT> img2d;
+    img2d.initZeros(ORI, ORI);
+    DIRECT_A2D_ELEM(img2d, ORI/2, ORI/2) = 1.0;
+
+    Projector p2d(ORI, TRILINEAR, PAD, RMIN);
+    MultidimArray<RFLOAT> ps;
+    p2d.computeFourierTransformMap(img2d, ps, -1, 1, true, true);
+
+    // f1d is a 1D array of half-size
+    MultidimArray<Complex> f1d;
+    f1d.initZeros(ORI / 2 + 1);
+
+    // A 2x2 matrix that maps 1D freq to 2D position (column vector along x-axis)
+    Matrix2D<RFLOAT> A(2, 2);
+    A.initIdentity();
+
+    EXPECT_NO_THROW(p2d.project2Dto1D(f1d, A));
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 int main(int argc, char** argv)

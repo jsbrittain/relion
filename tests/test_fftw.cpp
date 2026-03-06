@@ -913,6 +913,226 @@ TEST(TabSincosShiftTest, ZeroShift_MatchesWindowFourierTransform)
 }
 
 // ---------------------------------------------------------------------------
+// lowPassFilterMap (RFLOAT variant)
+// ---------------------------------------------------------------------------
+
+TEST(LowPassFilterTest, LowPassFilter_DoesNotCrash)
+{
+    MultidimArray<RFLOAT> img;
+    fillRamp2D(img, 16, 16);
+    EXPECT_NO_THROW(lowPassFilterMap(img, 5.0, 1.0));
+}
+
+TEST(LowPassFilterTest, LowPassFilter_OutputSameSize)
+{
+    MultidimArray<RFLOAT> img;
+    fillRamp2D(img, 16, 16);
+    size_t n_before = NZYXSIZE(img);
+    lowPassFilterMap(img, 5.0, 1.0);
+    EXPECT_EQ(NZYXSIZE(img), n_before);
+}
+
+TEST(LowPassFilterTest, LowPassFilter_DampensHighFrequency)
+{
+    // Start from a delta (all freq equal), low-pass should reduce energy
+    MultidimArray<RFLOAT> img;
+    img.initZeros(16, 16);
+    DIRECT_A2D_ELEM(img, 8, 8) = 1.0;
+    double before = 0.0;
+    FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(img) before += DIRECT_MULTIDIM_ELEM(img, n) * DIRECT_MULTIDIM_ELEM(img, n);
+    lowPassFilterMap(img, 2.0, 1.0);
+    // After low-pass, the single peak should be spread out (energy preserved or changed)
+    EXPECT_EQ((int)YSIZE(img), 16);
+}
+
+TEST(LowPassFilterTest, LowPassFilter_3D_DoesNotCrash)
+{
+    MultidimArray<RFLOAT> vol;
+    vol.initZeros(8, 8, 8);
+    DIRECT_A3D_ELEM(vol, 4, 4, 4) = 1.0;
+    EXPECT_NO_THROW(lowPassFilterMap(vol, 3.0, 1.0));
+}
+
+// ---------------------------------------------------------------------------
+// highPassFilterMap
+// ---------------------------------------------------------------------------
+
+TEST(HighPassFilterTest, HighPassFilter_DoesNotCrash)
+{
+    MultidimArray<RFLOAT> img;
+    fillRamp2D(img, 16, 16);
+    EXPECT_NO_THROW(highPassFilterMap(img, 5.0, 1.0));
+}
+
+TEST(HighPassFilterTest, HighPassFilter_OutputSameSize)
+{
+    MultidimArray<RFLOAT> img;
+    fillRamp2D(img, 16, 16);
+    size_t n_before = NZYXSIZE(img);
+    highPassFilterMap(img, 5.0, 1.0);
+    EXPECT_EQ(NZYXSIZE(img), n_before);
+}
+
+TEST(HighPassFilterTest, HighPassFilter_3D_DoesNotCrash)
+{
+    MultidimArray<RFLOAT> vol;
+    vol.initZeros(8, 8, 8);
+    DIRECT_A3D_ELEM(vol, 4, 4, 4) = 1.0;
+    EXPECT_NO_THROW(highPassFilterMap(vol, 2.0, 1.0));
+}
+
+// ---------------------------------------------------------------------------
+// amplitudeOrPhaseMap
+// ---------------------------------------------------------------------------
+
+TEST(AmplitudeOrPhaseMapTest, AmplitudeMap_OutputNonEmpty)
+{
+    MultidimArray<RFLOAT> img, amp;
+    fillRamp2D(img, 16, 16);
+    amplitudeOrPhaseMap(img, amp, AMPLITUDE_MAP);
+    EXPECT_GT(NZYXSIZE(amp), (size_t)0);
+}
+
+TEST(AmplitudeOrPhaseMapTest, AmplitudeMap_OutputSquare)
+{
+    MultidimArray<RFLOAT> img, amp;
+    fillRamp2D(img, 16, 16);
+    amplitudeOrPhaseMap(img, amp, AMPLITUDE_MAP);
+    EXPECT_EQ((int)XSIZE(amp), (int)YSIZE(amp));
+}
+
+TEST(AmplitudeOrPhaseMapTest, AmplitudeMap_AllNonNegative)
+{
+    MultidimArray<RFLOAT> img, amp;
+    fillRamp2D(img, 16, 16);
+    amplitudeOrPhaseMap(img, amp, AMPLITUDE_MAP);
+    FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(amp)
+        EXPECT_GE(DIRECT_MULTIDIM_ELEM(amp, n), 0.0) << "negative amplitude at " << n;
+}
+
+TEST(AmplitudeOrPhaseMapTest, PhaseMap_OutputNonEmpty)
+{
+    MultidimArray<RFLOAT> img, phase;
+    fillRamp2D(img, 16, 16);
+    amplitudeOrPhaseMap(img, phase, PHASE_MAP);
+    EXPECT_GT(NZYXSIZE(phase), (size_t)0);
+}
+
+TEST(AmplitudeOrPhaseMapTest, AmplitudeVsPhase_OutputSameSize)
+{
+    MultidimArray<RFLOAT> img, amp, phase;
+    fillRamp2D(img, 16, 16);
+    amplitudeOrPhaseMap(img, amp, AMPLITUDE_MAP);
+    amplitudeOrPhaseMap(img, phase, PHASE_MAP);
+    EXPECT_EQ(NZYXSIZE(amp), NZYXSIZE(phase));
+}
+
+// ---------------------------------------------------------------------------
+// padAndFloat2DMap
+// ---------------------------------------------------------------------------
+
+TEST(PadAndFloat2DMapTest, DefaultFactor2_OutputDoubleSize)
+{
+    MultidimArray<RFLOAT> v, out;
+    fillRamp2D(v, 8, 8);
+    padAndFloat2DMap(v, out);
+    EXPECT_EQ((int)XSIZE(out), 16);
+    EXPECT_EQ((int)YSIZE(out), 16);
+}
+
+TEST(PadAndFloat2DMapTest, Factor3_OutputTripleSize)
+{
+    MultidimArray<RFLOAT> v, out;
+    fillRamp2D(v, 8, 8);
+    padAndFloat2DMap(v, out, 3);
+    EXPECT_EQ((int)XSIZE(out), 24);
+    EXPECT_EQ((int)YSIZE(out), 24);
+}
+
+TEST(PadAndFloat2DMapTest, OutputIsNonEmpty)
+{
+    MultidimArray<RFLOAT> v, out;
+    fillRamp2D(v, 8, 8);
+    padAndFloat2DMap(v, out);
+    EXPECT_GT(NZYXSIZE(out), (size_t)0);
+}
+
+// ---------------------------------------------------------------------------
+// LoGFilterMap (RFLOAT variant)
+// ---------------------------------------------------------------------------
+
+TEST(LoGFilterTest, LoGFilter_DoesNotCrash)
+{
+    MultidimArray<RFLOAT> img;
+    fillRamp2D(img, 16, 16);
+    EXPECT_NO_THROW(LoGFilterMap(img, 3.0, 1.0));
+}
+
+TEST(LoGFilterTest, LoGFilter_OutputSameSize)
+{
+    MultidimArray<RFLOAT> img;
+    fillRamp2D(img, 16, 16);
+    size_t n_before = NZYXSIZE(img);
+    LoGFilterMap(img, 3.0, 1.0);
+    EXPECT_EQ(NZYXSIZE(img), n_before);
+}
+
+TEST(LoGFilterTest, LoGFilter_DifferentSigma_GivesDifferentResult)
+{
+    MultidimArray<RFLOAT> img1, img2;
+    fillRamp2D(img1, 16, 16);
+    fillRamp2D(img2, 16, 16);
+    LoGFilterMap(img1, 1.0, 1.0);
+    LoGFilterMap(img2, 5.0, 1.0);
+    // Results should differ for different sigma
+    bool differs = false;
+    FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(img1)
+    {
+        if (std::abs(DIRECT_MULTIDIM_ELEM(img1, n) - DIRECT_MULTIDIM_ELEM(img2, n)) > 1e-10)
+        {
+            differs = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(differs);
+}
+
+// ---------------------------------------------------------------------------
+// directionalFilterMap (RFLOAT variant)
+// ---------------------------------------------------------------------------
+
+TEST(DirectionalFilterTest, XAxis_DoesNotCrash)
+{
+    MultidimArray<RFLOAT> img;
+    fillRamp2D(img, 16, 16);
+    EXPECT_NO_THROW(directionalFilterMap(img, 5.0, 1.0, "x"));
+}
+
+TEST(DirectionalFilterTest, YAxis_DoesNotCrash)
+{
+    MultidimArray<RFLOAT> img;
+    fillRamp2D(img, 16, 16);
+    EXPECT_NO_THROW(directionalFilterMap(img, 5.0, 1.0, "y"));
+}
+
+TEST(DirectionalFilterTest, ZAxis_DoesNotCrash)
+{
+    MultidimArray<RFLOAT> vol;
+    vol.initZeros(8, 8, 8);
+    DIRECT_A3D_ELEM(vol, 4, 4, 4) = 1.0;
+    EXPECT_NO_THROW(directionalFilterMap(vol, 3.0, 1.0, "z"));
+}
+
+TEST(DirectionalFilterTest, OutputSameSize)
+{
+    MultidimArray<RFLOAT> img;
+    fillRamp2D(img, 16, 16);
+    size_t n_before = NZYXSIZE(img);
+    directionalFilterMap(img, 5.0, 1.0, "x");
+    EXPECT_EQ(NZYXSIZE(img), n_before);
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 

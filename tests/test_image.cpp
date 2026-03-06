@@ -172,6 +172,122 @@ TEST(ImageTest, Clear_DataBecomesEmpty)
     EXPECT_EQ(img.getSize(), (size_t)0);
 }
 
+// ----------------------------------------------- operator() access --
+
+TEST(ImageTest, ParenthesisOp_ReturnsMutableDataRef)
+{
+    Image<RFLOAT> img(8, 8);
+    // operator()() returns MultidimArray<T>&
+    MultidimArray<RFLOAT>& data_ref = img();
+    data_ref.initConstant(3.14);
+    EXPECT_NEAR(DIRECT_A2D_ELEM(img.data, 0, 0), 3.14, 1e-5);
+}
+
+TEST(ImageTest, ParenthesisOp_Const_ReturnsCRef)
+{
+    Image<RFLOAT> img(8, 8);
+    img.data.initConstant(2.71);
+    const Image<RFLOAT>& cimg = img;
+    const MultidimArray<RFLOAT>& cref = cimg();
+    EXPECT_NEAR(DIRECT_A2D_ELEM(cref, 0, 0), 2.71, 1e-5);
+}
+
+TEST(ImageTest, TwoIndexOp_ReadWrite)
+{
+    Image<RFLOAT> img(4, 4);
+    img(1, 2) = 9.9;
+    EXPECT_NEAR(img(1, 2), 9.9, 1e-5);
+}
+
+TEST(ImageTest, ThreeIndexOp_ReadWrite)
+{
+    Image<RFLOAT> img(4, 4, 4);
+    img(1, 2, 3) = 7.7;
+    EXPECT_NEAR(img(1, 2, 3), 7.7, 1e-5);
+}
+
+// ----------------------------------------------- name() --
+
+TEST(ImageTest, Name_DefaultIsEmpty)
+{
+    Image<RFLOAT> img(4, 4);
+    EXPECT_TRUE(img.name().empty());
+}
+
+// ----------------------------------------------- fImageHandler --
+
+TEST(ImageTest, FImageHandler_DefaultConstructor)
+{
+    fImageHandler hFile;
+    EXPECT_EQ(hFile.fimg, nullptr);
+}
+
+// ----------------------------------------------- Image<float> --
+
+TEST(ImageTest, FloatImage_SetSamplingRate)
+{
+    Image<float> img(8, 8);
+    img.setSamplingRateInHeader(2.5);
+    EXPECT_NEAR(img.samplingRateX(), 2.5, 1e-5);
+}
+
+TEST(ImageTest, FloatImage_OperatorParenthesis)
+{
+    Image<float> img(4, 4);
+    img().initConstant(1.5f);
+    EXPECT_NEAR(DIRECT_A2D_ELEM(img.data, 0, 0), 1.5f, 1e-5f);
+}
+
+TEST(ImageTest, FloatImage_TwoIndexOp)
+{
+    Image<float> img(4, 4);
+    img(0, 1) = 3.3f;
+    EXPECT_NEAR(img(0, 1), 3.3f, 1e-5f);
+}
+
+// ----------------------------------------------- Image<Complex> --
+
+TEST(ImageTest, ComplexImage_OperatorParenthesis)
+{
+    Image<Complex> img(4, 4);
+    img().initZeros(4, 4);
+    MultidimArray<Complex>& ref = img();
+    EXPECT_EQ((int)XSIZE(ref), 4);
+}
+
+TEST(ImageTest, ComplexImage_DefaultConstructor)
+{
+    Image<Complex> img;
+    EXPECT_EQ(img.getSize(), (size_t)0);
+}
+
+TEST(ImageTest, ComplexImage_TwoIndexConst)
+{
+    Image<Complex> img(4, 4);
+    img(1, 2) = Complex(1.5, 2.5);
+    const Image<Complex>& cimg = img;
+    Complex val = cimg(1, 2);
+    EXPECT_NEAR(val.real, 1.5, 1e-6);
+    EXPECT_NEAR(val.imag, 2.5, 1e-6);
+}
+
+// ----------------------------------------------- Image<float> const --
+
+TEST(ImageTest, FloatImage_DefaultConstructor)
+{
+    Image<float> img;
+    EXPECT_EQ(img.getSize(), (size_t)0);
+}
+
+TEST(ImageTest, FloatImage_ConstOperatorParenthesis)
+{
+    Image<float> img(4, 4);
+    img.data.initConstant(5.0f);
+    const Image<float>& cimg = img;
+    const MultidimArray<float>& cref = cimg();
+    EXPECT_NEAR(DIRECT_A2D_ELEM(cref, 0, 0), 5.0f, 1e-5f);
+}
+
 int main(int argc, char **argv)
 {
     ::testing::InitGoogleTest(&argc, argv);

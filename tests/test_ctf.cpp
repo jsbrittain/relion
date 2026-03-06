@@ -471,6 +471,144 @@ TEST(CTFTest, GetFftwImage_DoAbs_NonNegative)
 }
 
 // ---------------------------------------------------------------------------
+// setDefocusMatrix
+// ---------------------------------------------------------------------------
+TEST(CTFTest, SetDefocusMatrix_StoresValues)
+{
+    CTF ctf = makeCTF();
+    ctf.setDefocusMatrix(1.1, 0.5, 2.2);
+    EXPECT_NEAR(ctf.getAxx(), 1.1, EPS);
+    EXPECT_NEAR(ctf.getAxy(), 0.5, EPS);
+    EXPECT_NEAR(ctf.getAyy(), 2.2, EPS);
+}
+
+TEST(CTFTest, SetDefocusMatrix_ZeroMatrix)
+{
+    CTF ctf = makeCTF();
+    ctf.setDefocusMatrix(0.0, 0.0, 0.0);
+    EXPECT_NEAR(ctf.getAxx(), 0.0, EPS);
+    EXPECT_NEAR(ctf.getAxy(), 0.0, EPS);
+    EXPECT_NEAR(ctf.getAyy(), 0.0, EPS);
+}
+
+// ---------------------------------------------------------------------------
+// getCenteredImage
+// ---------------------------------------------------------------------------
+TEST(CTFTest, GetCenteredImage_CorrectSize)
+{
+    CTF ctf = makeCTF();
+    const int N = 16;
+    MultidimArray<RFLOAT> result;
+    result.resize(N, N);
+    ctf.getCenteredImage(result, 1.0);
+    EXPECT_EQ((int)XSIZE(result), N);
+    EXPECT_EQ((int)YSIZE(result), N);
+}
+
+TEST(CTFTest, GetCenteredImage_DoAbs_NonNegative)
+{
+    CTF ctf = makeCTF();
+    const int N = 16;
+    MultidimArray<RFLOAT> result;
+    result.resize(N, N);
+    ctf.getCenteredImage(result, 1.0, /*do_abs=*/true);
+    FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(result)
+        EXPECT_GE(DIRECT_MULTIDIM_ELEM(result, n), 0.0);
+}
+
+TEST(CTFTest, GetCenteredImage_DoOnlyFlipPhases_PlusOrMinusOne)
+{
+    CTF ctf = makeCTF();
+    const int N = 16;
+    MultidimArray<RFLOAT> result;
+    result.resize(N, N);
+    ctf.getCenteredImage(result, 1.0, false, /*do_only_flip_phases=*/true);
+    FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(result)
+    {
+        RFLOAT v = DIRECT_MULTIDIM_ELEM(result, n);
+        EXPECT_TRUE(std::abs(v - 1.0) < 1e-5 || std::abs(v + 1.0) < 1e-5)
+            << "element not ±1, got " << v;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// get1DProfile
+// ---------------------------------------------------------------------------
+TEST(CTFTest, Get1DProfile_CorrectSize)
+{
+    CTF ctf = makeCTF();
+    const int N = 32;
+    MultidimArray<RFLOAT> result;
+    result.resize(N);
+    ctf.get1DProfile(result, 0.0, 1.0);
+    EXPECT_EQ((int)XSIZE(result), N);
+}
+
+TEST(CTFTest, Get1DProfile_DoAbs_NonNegative)
+{
+    CTF ctf = makeCTF();
+    const int N = 32;
+    MultidimArray<RFLOAT> result;
+    result.resize(N);
+    ctf.get1DProfile(result, 0.0, 1.0, /*do_abs=*/true);
+    FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(result)
+        EXPECT_GE(DIRECT_MULTIDIM_ELEM(result, n), 0.0);
+}
+
+TEST(CTFTest, Get1DProfile_AtDifferentAngles_Differs)
+{
+    CTF ctf = makeCTF(/*defU=*/20000.0, /*defV=*/10000.0);  // astigmatic
+    const int N = 32;
+    MultidimArray<RFLOAT> r0, r90;
+    r0.resize(N); r90.resize(N);
+    ctf.get1DProfile(r0,  0.0, 1.0);
+    ctf.get1DProfile(r90, 90.0, 1.0);
+
+    // For astigmatic CTF, profiles at 0° and 90° should differ
+    bool differs = false;
+    FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(r0)
+    {
+        if (std::abs(DIRECT_MULTIDIM_ELEM(r0, n) - DIRECT_MULTIDIM_ELEM(r90, n)) > 1e-6)
+        {
+            differs = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(differs);
+}
+
+// ---------------------------------------------------------------------------
+// getCTFPImage
+// ---------------------------------------------------------------------------
+TEST(CTFTest, GetCTFPImage_CorrectDimensions)
+{
+    CTF ctf = makeCTF();
+    const int N = 16;
+    MultidimArray<Complex> result;
+    result.resize(N, N/2 + 1);
+    ctf.getCTFPImage(result, N, N, 1.0, /*is_positive=*/true, 0.0f);
+    EXPECT_EQ((int)YSIZE(result), N);
+    EXPECT_EQ((int)XSIZE(result), N/2 + 1);
+}
+
+TEST(CTFTest, GetCTFPImage_ModulusIsOne)
+{
+    CTF ctf = makeCTF();
+    const int N = 8;
+    MultidimArray<Complex> result;
+    result.resize(N, N/2 + 1);
+    ctf.getCTFPImage(result, N, N, 1.0, /*is_positive=*/true, 0.0f);
+
+    // Every element should have |c| == 1 (CTFP is a phase-only filter)
+    FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(result)
+    {
+        const Complex& c = DIRECT_MULTIDIM_ELEM(result, n);
+        RFLOAT mod = std::sqrt(c.real*c.real + c.imag*c.imag);
+        EXPECT_NEAR(mod, 1.0, FNEAR);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 int main(int argc, char** argv)
