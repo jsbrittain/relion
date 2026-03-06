@@ -40,7 +40,7 @@ target_link_libraries(test_expectation_mpi
     ${FFTW_LIBRARIES}
 )
 
-foreach(test_name IN ITEMS test_matrix1d test_matrix2d test_euler test_strings)
+foreach(test_name IN ITEMS test_matrix1d test_matrix2d test_euler test_strings test_ctf test_metadata_table)
     add_executable(${test_name}
         ${CMAKE_SOURCE_DIR}/tests/${test_name}.cpp
     )
@@ -82,6 +82,8 @@ if(COVERAGE)
         COMMAND ${CMAKE_BINARY_DIR}/bin/test_matrix2d
         COMMAND ${CMAKE_BINARY_DIR}/bin/test_euler
         COMMAND ${CMAKE_BINARY_DIR}/bin/test_strings
+        COMMAND ${CMAKE_BINARY_DIR}/bin/test_ctf
+        COMMAND ${CMAKE_BINARY_DIR}/bin/test_metadata_table
 
         # 2. Run the MPI test binary (requires mpirun; adjust -n as needed).
         COMMAND mpirun -n 2 ${CMAKE_BINARY_DIR}/bin/test_expectation_mpi
