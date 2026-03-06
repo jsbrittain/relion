@@ -202,7 +202,7 @@ public:
 	void clear()
 	{
 		data.clear();
-		r_max = r_min_nn = interpolator = ref_dim = data_dim = pad_size = 0;
+		ori_size = r_max = r_min_nn = interpolator = ref_dim = data_dim = pad_size = 0;
 		padding_factor = 0.;
 	}
 

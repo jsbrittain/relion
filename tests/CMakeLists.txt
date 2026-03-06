@@ -44,7 +44,7 @@ add_test(NAME test_expectation_mpi
     COMMAND mpirun -n 2 $<TARGET_FILE:test_expectation_mpi>
 )
 
-foreach(test_name IN ITEMS test_matrix1d test_matrix2d test_euler test_strings test_ctf test_metadata_table test_transformations)
+foreach(test_name IN ITEMS test_matrix1d test_matrix2d test_euler test_strings test_ctf test_metadata_table test_transformations test_projector)
     add_executable(${test_name}
         ${CMAKE_SOURCE_DIR}/tests/${test_name}.cpp
     )
@@ -90,6 +90,7 @@ if(COVERAGE)
         COMMAND ${CMAKE_BINARY_DIR}/bin/test_ctf
         COMMAND ${CMAKE_BINARY_DIR}/bin/test_metadata_table
         COMMAND ${CMAKE_BINARY_DIR}/bin/test_transformations
+        COMMAND ${CMAKE_BINARY_DIR}/bin/test_projector
 
         # 2. Run the MPI test binary (requires mpirun; adjust -n as needed).
         COMMAND mpirun -n 2 ${CMAKE_BINARY_DIR}/bin/test_expectation_mpi
