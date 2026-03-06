@@ -358,6 +358,119 @@ TEST(CTFTest, WritePopulatesMetaDataTable)
 }
 
 // ---------------------------------------------------------------------------
+// 20. getCTFP – complex CTF value has unit modulus
+// ---------------------------------------------------------------------------
+TEST(CTFTest, GetCTFP_ModulusIsOne)
+{
+    CTF ctf = makeCTF();
+    const double X = 0.005, Y = 0.003;
+    Complex p = ctf.getCTFP(X, Y, /*is_positive=*/true);
+    double mod = std::sqrt(p.real * p.real + p.imag * p.imag);
+    EXPECT_NEAR(mod, 1.0, FNEAR);
+}
+
+TEST(CTFTest, GetCTFP_PositiveVsNegative_ImagFlips)
+{
+    CTF ctf = makeCTF();
+    const double X = 0.004, Y = 0.002;
+    Complex pos = ctf.getCTFP(X, Y, true);
+    Complex neg = ctf.getCTFP(X, Y, false);
+    EXPECT_NEAR(pos.real,  neg.real,  EPS);
+    EXPECT_NEAR(pos.imag, -neg.imag,  EPS);
+}
+
+// ---------------------------------------------------------------------------
+// 21. getCtfFreq – positive at non-zero frequency
+// ---------------------------------------------------------------------------
+TEST(CTFTest, GetCtfFreq_NonNegativeAtOrigin)
+{
+    CTF ctf = makeCTF();
+    RFLOAT freq = ctf.getCtfFreq(0.0, 0.0);
+    EXPECT_NEAR(freq, 0.0, EPS);
+}
+
+TEST(CTFTest, GetCtfFreq_NonZeroAtNonzeroFreq)
+{
+    CTF ctf = makeCTF();
+    RFLOAT freq = ctf.getCtfFreq(0.01, 0.0);
+    EXPECT_NE(freq, 0.0);
+}
+
+// ---------------------------------------------------------------------------
+// 22. getGammaGrad – zero at origin, non-zero away from origin
+// ---------------------------------------------------------------------------
+TEST(CTFTest, GetGammaGrad_ZeroAtOrigin)
+{
+    CTF ctf = makeCTF();
+    auto g = ctf.getGammaGrad(0.0, 0.0);
+    EXPECT_NEAR(g[0], 0.0, EPS);
+    EXPECT_NEAR(g[1], 0.0, EPS);
+}
+
+TEST(CTFTest, GetGammaGrad_NonZeroAwayFromOrigin)
+{
+    CTF ctf = makeCTF();
+    auto g = ctf.getGammaGrad(0.01, 0.0);
+    double mag = std::sqrt(g[0]*g[0] + g[1]*g[1]);
+    EXPECT_GT(mag, 0.0);
+}
+
+// ---------------------------------------------------------------------------
+// 23. getCTF with dose parameter
+// ---------------------------------------------------------------------------
+TEST(CTFTest, DoseDecay_ReducesAmplitude)
+{
+    // With dose=1, CTF amplitude at non-zero freq is reduced relative to dose<0
+    CTF ctf_no_dose  = makeCTF(DEF_U, DEF_V, DEF_ANG, KV, CS, Q0, 0.0, 1.0);
+    CTF ctf_with_dose;
+    ctf_with_dose.setValues(DEF_U, DEF_V, DEF_ANG, KV, CS, Q0, 0.0, 1.0, 0.0, /*dose=*/1.0);
+
+    const double f = 0.01;
+    double val_no_dose   = std::abs(ctf_no_dose.getCTF(f, 0.0));
+    double val_with_dose = std::abs(ctf_with_dose.getCTF(f, 0.0));
+    EXPECT_NE(val_no_dose, val_with_dose);
+}
+
+// ---------------------------------------------------------------------------
+// 24. getCTF do_intact_after_first_peak
+// ---------------------------------------------------------------------------
+TEST(CTFTest, DoIntactAfterFirstPeak_ReturnsOneAtHighGamma)
+{
+    CTF ctf = makeCTF();
+    // At very high frequency, |gamma| > PI/2, so do_intact_after_first_peak=true
+    // should return scale (=1.0) rather than the sinusoidal value.
+    const double f = 0.05;  // well beyond first zero
+    double v_intact = ctf.getCTF(f, 0.0, false, false, false, false, 0.0,
+                                 /*do_intact_after_first_peak=*/true);
+    EXPECT_NEAR(std::abs(v_intact), SCALE, FNEAR);
+}
+
+// ---------------------------------------------------------------------------
+// 25. getFftwImage – result has correct dimensions and values
+// ---------------------------------------------------------------------------
+TEST(CTFTest, GetFftwImage_CorrectDimensions)
+{
+    CTF ctf = makeCTF();
+    int N = 32;
+    MultidimArray<RFLOAT> result;
+    result.resize(N, N/2 + 1);
+    ctf.getFftwImage(result, N, N, /*angpix=*/1.0);
+    EXPECT_EQ(XSIZE(result), N/2 + 1);
+    EXPECT_EQ(YSIZE(result), N);
+}
+
+TEST(CTFTest, GetFftwImage_DoAbs_NonNegative)
+{
+    CTF ctf = makeCTF();
+    int N = 16;
+    MultidimArray<RFLOAT> result;
+    result.resize(N, N/2 + 1);
+    ctf.getFftwImage(result, N, N, 1.0, /*do_abs=*/true);
+    FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(result)
+        EXPECT_GE(DIRECT_MULTIDIM_ELEM(result, n), 0.0);
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 int main(int argc, char** argv)

@@ -553,6 +553,366 @@ TEST_F(ShiftFourierTest, DC_Unaffected_By_Shift)
 }
 
 // ---------------------------------------------------------------------------
+// FourierTransformer copy constructor / getReal / getComplex / cleanup
+// ---------------------------------------------------------------------------
+
+TEST_F(FourierTransformerTest, CopyConstructor_DoesNotCrash)
+{
+    // Test that copy-constructing an uninitialized FourierTransformer does not crash.
+    // (Copying a transformer that has active FFTW plans shares plan pointers and is
+    // not safe to use, so we only verify the constructor itself doesn't crash.)
+    FourierTransformer ft1;
+    FourierTransformer ft2(ft1);
+    SUCCEED();
+}
+
+TEST_F(FourierTransformerTest, GetReal_ReturnsRealArray)
+{
+    MultidimArray<RFLOAT> v;
+    fillRamp2D(v, 4, 4);
+    MultidimArray<Complex> F;
+    FourierTransformer ft;
+    ft.FourierTransform(v, F, false);
+
+    const MultidimArray<RFLOAT>& r = ft.getReal();
+    EXPECT_EQ(XSIZE(r), XSIZE(v));
+    EXPECT_EQ(YSIZE(r), YSIZE(v));
+}
+
+TEST_F(FourierTransformerTest, GetComplex_AfterComplexSetReal)
+{
+    MultidimArray<Complex> cplx;
+    cplx.resize(4, 4);
+    FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(cplx)
+        DIRECT_MULTIDIM_ELEM(cplx, n) = Complex(1.0, 0.0);
+
+    FourierTransformer ft;
+    ft.setReal(cplx);
+
+    const MultidimArray<Complex>& c = ft.getComplex();
+    EXPECT_EQ(XSIZE(c), XSIZE(cplx));
+    EXPECT_EQ(YSIZE(c), YSIZE(cplx));
+}
+
+TEST_F(FourierTransformerTest, Cleanup_DoesNotCrash)
+{
+    MultidimArray<RFLOAT> v;
+    fillRamp2D(v, 4, 4);
+    MultidimArray<Complex> F;
+    FourierTransformer ft;
+    ft.FourierTransform(v, F, false);
+    ft.cleanup();  // should not crash
+    SUCCEED();
+}
+
+TEST_F(FourierTransformerTest, EnforceHermitianSymmetry_2D)
+{
+    MultidimArray<RFLOAT> v;
+    fillRamp2D(v, 8, 8);
+    MultidimArray<Complex> F;
+    FourierTransformer ft;
+    ft.FourierTransform(v, F, false);
+    ft.enforceHermitianSymmetry();  // must not crash
+    SUCCEED();
+}
+
+TEST_F(FourierTransformerTest, FourierTransformThenInverseNoArg)
+{
+    // Test the no-argument FourierTransform() and inverseFourierTransform() methods
+    MultidimArray<RFLOAT> orig, work;
+    fillRamp2D(orig, 4, 4);
+    work = orig;
+
+    FourierTransformer ft;
+    ft.setReal(work);
+    ft.FourierTransform();      // no-arg version
+    ft.inverseFourierTransform(); // no-arg version
+
+    EXPECT_LT(maxDiff(work, orig), 1e-9);
+}
+
+// ---------------------------------------------------------------------------
+// getFSC with pre-computed Fourier transforms
+// ---------------------------------------------------------------------------
+
+TEST(GetFSCComplexTest, IdenticalFTs_AllOne)
+{
+    MultidimArray<RFLOAT> m1, fsc;
+    fillRamp2D(m1, 8, 8);
+    MultidimArray<Complex> FT1, FT2;
+    FourierTransformer ft;
+    ft.FourierTransform(m1, FT1, true);
+    FT2 = FT1;
+
+    getFSC(FT1, FT2, fsc);
+
+    for (long int i = 1; i < XSIZE(fsc); i++)
+        EXPECT_NEAR(DIRECT_A1D_ELEM(fsc, i), 1.0, 1e-6) << "shell " << i;
+}
+
+// ---------------------------------------------------------------------------
+// getAmplitudeCorrelationAndDifferentialPhaseResidual
+// ---------------------------------------------------------------------------
+
+TEST(AcorrDprTest, IdenticalImages_AcorrAllOne)
+{
+    MultidimArray<RFLOAT> m1, acorr, dpr;
+    fillRamp2D(m1, 8, 8);
+    MultidimArray<RFLOAT> m2 = m1;
+
+    getAmplitudeCorrelationAndDifferentialPhaseResidual(m1, m2, acorr, dpr);
+
+    // Amplitude correlation between identical images should be 1 everywhere
+    for (long int i = 1; i < XSIZE(acorr); i++)
+        EXPECT_NEAR(DIRECT_A1D_ELEM(acorr, i), 1.0, 1e-5) << "shell " << i;
+}
+
+TEST(AcorrDprTest, IdenticalImages_DPRIsZero)
+{
+    MultidimArray<RFLOAT> m1, acorr, dpr;
+    fillRamp2D(m1, 8, 8);
+    MultidimArray<RFLOAT> m2 = m1;
+
+    getAmplitudeCorrelationAndDifferentialPhaseResidual(m1, m2, acorr, dpr);
+
+    for (long int i = 0; i < XSIZE(dpr); i++)
+        EXPECT_NEAR(DIRECT_A1D_ELEM(dpr, i), 0.0, 1e-5) << "shell " << i;
+}
+
+// ---------------------------------------------------------------------------
+// getCosDeltaPhase
+// ---------------------------------------------------------------------------
+
+TEST(CosDeltaPhaseTest, IdenticalFTs_AllOne)
+{
+    MultidimArray<RFLOAT> m1;
+    fillRamp2D(m1, 8, 8);
+    MultidimArray<Complex> FT1, FT2;
+    FourierTransformer ft;
+    ft.FourierTransform(m1, FT1, true);
+    FT2 = FT1;
+
+    MultidimArray<RFLOAT> cosPhi;
+    getCosDeltaPhase(FT1, FT2, cosPhi);
+
+    for (long int i = 0; i < XSIZE(cosPhi); i++)
+        EXPECT_NEAR(DIRECT_A1D_ELEM(cosPhi, i), 1.0, 1e-5) << "shell " << i;
+}
+
+// ---------------------------------------------------------------------------
+// getAbMatricesForShiftImageInFourierTransform
+// ---------------------------------------------------------------------------
+
+TEST(AbMatricesTest, ZeroShift_RealPartNearOne)
+{
+    MultidimArray<RFLOAT> v;
+    fillRamp2D(v, 8, 8);
+    MultidimArray<Complex> Fin, ab;
+    FourierTransformer ft;
+    ft.FourierTransform(v, Fin, true);
+
+    getAbMatricesForShiftImageInFourierTransform(Fin, ab, 8.0, 0.0, 0.0, 0.0);
+
+    // With zero shift, exp(i*0) = (1,0), so real part should be 1, imag 0
+    FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(ab)
+    {
+        EXPECT_NEAR(DIRECT_MULTIDIM_ELEM(ab, n).real, 1.0, 1e-10);
+        EXPECT_NEAR(DIRECT_MULTIDIM_ELEM(ab, n).imag, 0.0, 1e-10);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// divideBySpectrum / multiplyBySpectrum
+// ---------------------------------------------------------------------------
+
+TEST(DivideBySpectrumTest, UniformSpectrum_PreservesImage)
+{
+    MultidimArray<RFLOAT> v;
+    fillRamp2D(v, 8, 8);
+    MultidimArray<RFLOAT> orig = v;
+
+    // Build a uniform spectrum of ones
+    MultidimArray<RFLOAT> spectrum;
+    spectrum.initZeros(5);  // N/2+1 = 5
+    spectrum.initConstant(1.0);
+
+    divideBySpectrum(v, spectrum);
+
+    EXPECT_LT(maxDiff(v, orig), 1e-9);
+}
+
+TEST(MultiplyBySpectrumTest, ZeroSpectrum_ZerosImage)
+{
+    MultidimArray<RFLOAT> v;
+    fillRamp2D(v, 8, 8);
+
+    MultidimArray<RFLOAT> spectrum;
+    spectrum.initZeros(5);
+
+    multiplyBySpectrum(v, spectrum);
+
+    // Image should be all zeros after multiply by zero spectrum
+    double maxVal = 0.0;
+    FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(v)
+        maxVal = std::max(maxVal, std::abs((double)DIRECT_MULTIDIM_ELEM(v, n)));
+    EXPECT_NEAR(maxVal, 0.0, 1e-10);
+}
+
+// ---------------------------------------------------------------------------
+// whitenSpectrum
+// ---------------------------------------------------------------------------
+
+TEST(WhitenSpectrumTest, OutputSameShape)
+{
+    MultidimArray<RFLOAT> in, out;
+    fillRamp2D(in, 8, 8);
+    whitenSpectrum(in, out, POWER_SPECTRUM);
+    EXPECT_EQ(XSIZE(out), XSIZE(in));
+    EXPECT_EQ(YSIZE(out), YSIZE(in));
+}
+
+// ---------------------------------------------------------------------------
+// adaptSpectrum
+// ---------------------------------------------------------------------------
+
+TEST(AdaptSpectrumTest, OutputSameShape)
+{
+    MultidimArray<RFLOAT> in, out;
+    fillRamp2D(in, 8, 8);
+
+    // Use a flat reference spectrum
+    MultidimArray<RFLOAT> ref;
+    ref.initZeros(5);
+    ref.initConstant(1.0);
+
+    adaptSpectrum(in, out, ref, POWER_SPECTRUM);
+    EXPECT_EQ(XSIZE(out), XSIZE(in));
+    EXPECT_EQ(YSIZE(out), YSIZE(in));
+}
+
+// ---------------------------------------------------------------------------
+// resizeMap
+// ---------------------------------------------------------------------------
+
+TEST(ResizeMapTest, DownsampleByHalf_2D)
+{
+    MultidimArray<RFLOAT> v;
+    fillRamp2D(v, 8, 8);
+
+    resizeMap(v, 4);
+
+    EXPECT_EQ(XSIZE(v), 4);
+    EXPECT_EQ(YSIZE(v), 4);
+}
+
+TEST(ResizeMapTest, UpsampleByTwo_2D)
+{
+    MultidimArray<RFLOAT> v;
+    fillRamp2D(v, 4, 4);
+
+    resizeMap(v, 8);
+
+    EXPECT_EQ(XSIZE(v), 8);
+    EXPECT_EQ(YSIZE(v), 8);
+}
+
+// ---------------------------------------------------------------------------
+// applyBFactorToMap
+// ---------------------------------------------------------------------------
+
+TEST(ApplyBFactorTest, ZeroBfactor_NoChange_RFLOAT)
+{
+    MultidimArray<RFLOAT> v;
+    fillRamp2D(v, 8, 8);
+    MultidimArray<RFLOAT> orig = v;
+
+    applyBFactorToMap(v, 0.0, 1.0);
+
+    EXPECT_LT(maxDiff(v, orig), 1e-6);
+}
+
+TEST(ApplyBFactorTest, PositiveBfactor_ReducesPower_RFLOAT)
+{
+    MultidimArray<RFLOAT> v;
+    fillRamp2D(v, 8, 8);
+
+    // Sum of squares before and after should differ with nonzero bfactor
+    double before = 0.0;
+    FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(v)
+        before += DIRECT_MULTIDIM_ELEM(v, n) * DIRECT_MULTIDIM_ELEM(v, n);
+
+    applyBFactorToMap(v, 100.0, 1.0);
+
+    double after = 0.0;
+    FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(v)
+        after += DIRECT_MULTIDIM_ELEM(v, n) * DIRECT_MULTIDIM_ELEM(v, n);
+
+    EXPECT_LT(after, before);
+}
+
+TEST(ApplyBFactorTest, FourierVariant_DoesNotCrash)
+{
+    MultidimArray<RFLOAT> v;
+    fillRamp2D(v, 8, 8);
+    MultidimArray<Complex> FT;
+    FourierTransformer ft;
+    ft.FourierTransform(v, FT, true);
+
+    applyBFactorToMap(FT, 8, 0.0, 1.0);  // zero bfactor
+    SUCCEED();
+}
+
+// ---------------------------------------------------------------------------
+// randomizePhasesBeyond
+// ---------------------------------------------------------------------------
+
+TEST(RandomizePhasesBeyondTest, OutputSameShape)
+{
+    MultidimArray<RFLOAT> v;
+    fillRamp2D(v, 8, 8);
+    MultidimArray<RFLOAT> orig = v;
+
+    randomizePhasesBeyond(v, 4);
+
+    EXPECT_EQ(XSIZE(v), XSIZE(orig));
+    EXPECT_EQ(YSIZE(v), YSIZE(orig));
+}
+
+// ---------------------------------------------------------------------------
+// shiftImageInFourierTransformWithTabSincos
+// ---------------------------------------------------------------------------
+
+TEST(TabSincosShiftTest, ZeroShift_MatchesWindowFourierTransform)
+{
+    MultidimArray<RFLOAT> v;
+    fillRamp2D(v, 8, 8);
+    MultidimArray<Complex> Fin, Fout_tab, Fout_ref;
+    FourierTransformer ft;
+    ft.FourierTransform(v, Fin, true);
+
+    TabSine   tabsin;
+    TabCosine tabcos;
+    tabsin.initialise(10000);
+    tabcos.initialise(10000);
+
+    // Zero shift should produce a windowed (same-size) output
+    shiftImageInFourierTransformWithTabSincos(Fin, Fout_tab, 8.0, 8, tabsin, tabcos, 0.0, 0.0, 0.0);
+
+    // With zero shift the output should match a plain windowFourierTransform
+    windowFourierTransform(Fin, Fout_ref, 8);
+
+    double maxd = 0.0;
+    FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(Fout_tab)
+    {
+        double dr = std::abs(DIRECT_MULTIDIM_ELEM(Fout_tab, n).real - DIRECT_MULTIDIM_ELEM(Fout_ref, n).real);
+        double di = std::abs(DIRECT_MULTIDIM_ELEM(Fout_tab, n).imag - DIRECT_MULTIDIM_ELEM(Fout_ref, n).imag);
+        if (dr > maxd) maxd = dr;
+        if (di > maxd) maxd = di;
+    }
+    EXPECT_LT(maxd, 1e-9);
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
