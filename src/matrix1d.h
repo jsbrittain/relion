@@ -979,8 +979,11 @@ public:
         jmax = 0;
         T maxval = (*this)(0);
         for (int j = 0; j < vdim; j++)
-       	 if ( (*this)(j) > maxval )
-       		 jmax =j;
+            if ( (*this)(j) > maxval )
+            {
+                maxval = (*this)(j);
+                jmax = j;
+            }
     }
 
     /** Index for the minimum element.
@@ -999,8 +1002,11 @@ public:
         jmin = 0;
         T minval = (*this)(0);
         for (int j = 0; j < vdim; j++)
-       	 if ( (*this)(j) < minval )
-       		 jmin =j;
+            if ( (*this)(j) < minval )
+            {
+                minval = (*this)(j);
+                jmin = j;
+            }
     }
 
     /** Algebraic transpose of vector

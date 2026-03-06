@@ -655,6 +655,22 @@ else()
 endif()
 
 
+# ---------------------------------------------------------------COVERAGE SUPPORT--
+# Enable with -DCOVERAGE=ON.  Requires gcc/g++ and lcov + genhtml on PATH.
+# Build with Debug or a coverage-friendly type (not benchmarking/Release, which
+# apply -O2/-O3 and inline away many lines, producing misleading branch counts).
+# Must appear before ADD_SUBDIRECTORY(src/apps) and add_subdirectory(tests)
+# so that the flags apply to all targets.
+option(COVERAGE "Instrument with gcov coverage flags" OFF)
+if(COVERAGE)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+        message(WARNING "COVERAGE=ON is only tested with GCC; other compilers may need different flags.")
+    endif()
+    message(STATUS "Coverage instrumentation enabled (--coverage)")
+    add_compile_options(--coverage)
+    add_link_options(--coverage)
+endif()
+
 ADD_SUBDIRECTORY(src/apps)
 
 #message(STATUS "CUDA option = ${CUDA}")
