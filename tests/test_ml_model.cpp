@@ -55,7 +55,7 @@ TEST(MlModelTest, Clear_ResetsAllVectors)
     m.ori_size   = 64;
     m.padding_factor = 2;
     m.interpolator = 0;
-    m.r_min_nn = 0;  // keep at 0: clear() sets nr_classes = r_min_nn
+    m.r_min_nn = 10;
     m.data_dim = 2;
     m.initialise();
 

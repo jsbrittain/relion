@@ -399,7 +399,7 @@ public:
 		class_age.clear();
 		pdf_direction.clear();
 		nr_particles_per_group.clear();
-		ref_dim = data_dim = ori_size = nr_classes = nr_bodies = nr_groups = nr_directions = interpolator = r_min_nn;
+		ref_dim = data_dim = ori_size = nr_classes = nr_bodies = nr_groups = nr_directions = interpolator = r_min_nn = 0;
 		padding_factor = 0.;
 		ave_Pmax = avg_norm_correction = LL = sigma2_offset = tau2_fudge_factor = 0.;
 		sigma2_rot = sigma2_tilt = sigma2_psi = 0.;

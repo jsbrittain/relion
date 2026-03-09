@@ -960,7 +960,8 @@ public:
 #endif
             failsafe_threshold(40),
             do_trust_ref_size(0),
-            minimum_nr_particles_sigma2_noise(1000)
+            minimum_nr_particles_sigma2_noise(1000),
+            requested_free_gpu_memory(0)
 	{
 #ifdef TIMING
 		// Initialise all timing IDs to -1 so that Timer::tic/toc no-op on
