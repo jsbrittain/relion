@@ -218,6 +218,147 @@ TEST(HelixTest, CheckParameters_IgnoreSymmetry)
 }
 
 // ---------------------------------------------------------------------------
+// calcRadialAverage
+// ---------------------------------------------------------------------------
+
+TEST(HelixTest, CalcRadialAverage_ConstantVolume)
+{
+    // 10x10x10 volume of all-ones → radial avg should be 1.0 everywhere
+    MultidimArray<RFLOAT> v;
+    v.initZeros(10, 10, 10);
+    v.initConstant(1.0);
+
+    std::vector<RFLOAT> radial_avg;
+    calcRadialAverage(v, radial_avg);
+
+    EXPECT_FALSE(radial_avg.empty());
+    // r=0 bin should be ≈ 1.0 (only centre voxel)
+    EXPECT_NEAR(radial_avg[0], 1.0, 1e-6);
+}
+
+TEST(HelixTest, CalcRadialAverage_OutputSizeIsPositive)
+{
+    MultidimArray<RFLOAT> v;
+    v.initZeros(8, 8, 8);
+    v.initConstant(2.0);
+
+    std::vector<RFLOAT> radial_avg;
+    calcRadialAverage(v, radial_avg);
+
+    EXPECT_GT(radial_avg.size(), (size_t)0);
+}
+
+// ---------------------------------------------------------------------------
+// cutZCentralPartOfSoftMask
+// ---------------------------------------------------------------------------
+
+TEST(HelixTest, CutZCentralPartOfSoftMask_OuterVoxelsZero)
+{
+    // 10x10x10 volume of all-ones; keep 30% of Z → outer slices zeroed
+    MultidimArray<RFLOAT> mask;
+    mask.initZeros(10, 10, 10);
+    mask.initConstant(1.0);
+
+    cutZCentralPartOfSoftMask(mask, 0.3, 1.0);
+
+    // Centre slice (z=0) should remain 1
+    mask.setXmippOrigin();
+    EXPECT_NEAR(A3D_ELEM(mask, 0, 0, 0), 1.0, 1e-6);
+
+    // Extreme z should be 0 (far outside central 30% + cosine edge)
+    int Zdim = ZSIZE(mask);
+    int extremeZ = (int)(Zdim / 2); // outermost slice in setXmippOrigin coords
+    // The value at extreme z should be 0 or close to 0
+    EXPECT_LE(A3D_ELEM(mask, extremeZ, 0, 0), 0.01);
+}
+
+// ---------------------------------------------------------------------------
+// createCylindricalReference
+// ---------------------------------------------------------------------------
+
+TEST(HelixTest, CreateCylindricalReference_CentreIsOne)
+{
+    MultidimArray<RFLOAT> v;
+    // box=10, inner_diameter=0, outer_diameter=8 → inner_radius=0, outer_radius=4
+    // Solid region: r > 0 AND r < 4, so voxel (k=0,i=1,j=0) with r=1 should be 1
+    createCylindricalReference(v, 10, 0.0, 8.0, 0.0);
+
+    ASSERT_EQ(XSIZE(v), 10);
+    v.setXmippOrigin();
+    // r=1 is strictly between inner_radius=0 and outer_radius=4 → 1.0
+    EXPECT_NEAR(A3D_ELEM(v, 0, 1, 0), 1.0, 1e-6);
+}
+
+TEST(HelixTest, CreateCylindricalReference_OutsideIsZero)
+{
+    MultidimArray<RFLOAT> v;
+    createCylindricalReference(v, 10, 0.0, 4.0, 0.0);
+    v.setXmippOrigin();
+
+    // At r = 4+ (beyond outer_radius=2 with cosine_width=0) → 0
+    int half = XSIZE(v) / 2;
+    EXPECT_NEAR(A3D_ELEM(v, 0, 0, half), 0.0, 1e-6);
+}
+
+TEST(HelixTest, CreateCylindricalReference_HollowCentre)
+{
+    // inner=4, outer=8 pix → origin (r=0) should be 0 (inside hollow)
+    MultidimArray<RFLOAT> v;
+    createCylindricalReference(v, 20, 4.0, 8.0, 0.0);
+    v.setXmippOrigin();
+    EXPECT_NEAR(A3D_ELEM(v, 0, 0, 0), 0.0, 1e-6);
+}
+
+// ---------------------------------------------------------------------------
+// applySoftSphericalMask
+// ---------------------------------------------------------------------------
+
+TEST(HelixTest, ApplySoftSphericalMask_CentreUnchanged)
+{
+    // 10x10x10 volume of all-ones, large sphere → centre stays 1
+    MultidimArray<RFLOAT> v;
+    v.initZeros(10, 10, 10);
+    v.initConstant(1.0);
+
+    applySoftSphericalMask(v, -1.0, 1.0); // sphere_diameter<0 → uses full volume
+
+    v.setXmippOrigin();
+    EXPECT_NEAR(A3D_ELEM(v, 0, 0, 0), 1.0, 1e-6);
+}
+
+TEST(HelixTest, ApplySoftSphericalMask_CornerVoxelsReducedOrZero)
+{
+    // 10x10x10 volume of all-ones, small sphere → corner voxels should be 0
+    MultidimArray<RFLOAT> v;
+    v.initZeros(10, 10, 10);
+    v.initConstant(1.0);
+
+    // Sphere radius = 2 pix, cosine_width = 1 pix → corner voxels (r > 3) → 0
+    applySoftSphericalMask(v, 4.0, 1.0);
+    v.setXmippOrigin();
+
+    int half = XSIZE(v) / 2; // outermost in Xmipp coords
+    EXPECT_NEAR(A3D_ELEM(v, half, half, half), 0.0, 1e-6);
+}
+
+// ---------------------------------------------------------------------------
+// transformCartesianAndHelicalCoords — Matrix1D overload
+// ---------------------------------------------------------------------------
+
+TEST(HelixTest, TransformCartesian_Matrix1D_ZeroAngles_Identity)
+{
+    Matrix1D<RFLOAT> in(3), out(3);
+    in.initZeros();
+    XX(in) = 1.0; YY(in) = 2.0; ZZ(in) = 3.0;
+
+    transformCartesianAndHelicalCoords(in, out, 0.0, 0.0, 0.0, true);
+
+    EXPECT_NEAR(XX(out), 1.0, LOOSE);
+    EXPECT_NEAR(YY(out), 2.0, LOOSE);
+    EXPECT_NEAR(ZZ(out), 3.0, LOOSE);
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 

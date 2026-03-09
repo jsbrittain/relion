@@ -235,6 +235,162 @@ TEST(LocalSymTest, Similar3DCubicMasks_VeryDifferent)
 }
 
 // ---------------------------------------------------------------------------
+// sum3DCubicMask
+// ---------------------------------------------------------------------------
+
+TEST(LocalSymTest, Sum3DCubicMask_AllOnes)
+{
+    // 4x4x4 volume of all-ones: sum = 64, ctr = 64
+    MultidimArray<RFLOAT> v;
+    v.initZeros(4, 4, 4);
+    v.initConstant(1.0);
+    RFLOAT val_sum = 0., val_ctr = 0.;
+    sum3DCubicMask(v, val_sum, val_ctr);
+    EXPECT_NEAR(val_sum, 64.0, 1e-6);
+    EXPECT_NEAR(val_ctr, 64.0, 1e-6);
+}
+
+TEST(LocalSymTest, Sum3DCubicMask_HalfOnes)
+{
+    // 4x4x4 volume: half voxels = 0.5
+    MultidimArray<RFLOAT> v;
+    v.initZeros(4, 4, 4);
+    v.initConstant(0.5);
+    RFLOAT val_sum = 0., val_ctr = 0.;
+    sum3DCubicMask(v, val_sum, val_ctr);
+    EXPECT_NEAR(val_sum, 32.0, 1e-6); // 64 * 0.5
+    EXPECT_NEAR(val_ctr, 64.0, 1e-6); // all 64 voxels > 0
+}
+
+// ---------------------------------------------------------------------------
+// Localsym_translations2vector
+// ---------------------------------------------------------------------------
+
+TEST(LocalSymTest, Translations2vector_NoInvert)
+{
+    Matrix1D<RFLOAT> op;
+    Localsym_composeOperator(op, 10.0, 20.0, 30.0, 5.0, 6.0, 7.0, 0.8);
+
+    Matrix1D<RFLOAT> tvec;
+    Localsym_translations2vector(op, tvec, LOCALSYM_OP_DONT_INVERT);
+
+    EXPECT_NEAR(XX(tvec),  5.0, TOL);
+    EXPECT_NEAR(YY(tvec),  6.0, TOL);
+    EXPECT_NEAR(ZZ(tvec),  7.0, TOL);
+}
+
+TEST(LocalSymTest, Translations2vector_WithInvert)
+{
+    Matrix1D<RFLOAT> op;
+    Localsym_composeOperator(op, 0.0, 0.0, 0.0, 3.0, -4.0, 5.0, 1.0);
+
+    Matrix1D<RFLOAT> tvec;
+    Localsym_translations2vector(op, tvec, LOCALSYM_OP_DO_INVERT);
+
+    EXPECT_NEAR(XX(tvec), -3.0, TOL);
+    EXPECT_NEAR(YY(tvec),  4.0, TOL);
+    EXPECT_NEAR(ZZ(tvec), -5.0, TOL);
+}
+
+// ---------------------------------------------------------------------------
+// Localsym_angles2matrix
+// ---------------------------------------------------------------------------
+
+TEST(LocalSymTest, Angles2Matrix_IdentityAngles_IsIdentity)
+{
+    // Zero Euler angles → identity-like rotation in 4x4
+    Matrix1D<RFLOAT> op;
+    Localsym_composeOperator(op, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0);
+
+    Matrix2D<RFLOAT> mat;
+    Localsym_angles2matrix(op, mat, LOCALSYM_OP_DONT_INVERT);
+
+    ASSERT_EQ(MAT_XSIZE(mat), 4);
+    ASSERT_EQ(MAT_YSIZE(mat), 4);
+
+    // Upper-left 3×3 should be identity
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++)
+            EXPECT_NEAR(MAT_ELEM(mat, i, j), (i == j) ? 1.0 : 0.0, 1e-9);
+    // Bottom-right corner = 1
+    EXPECT_NEAR(MAT_ELEM(mat, 3, 3), 1.0, TOL);
+}
+
+TEST(LocalSymTest, Angles2Matrix_Invert_TransposeRelation)
+{
+    Matrix1D<RFLOAT> op;
+    Localsym_composeOperator(op, 30.0, 45.0, 60.0, 0.0, 0.0, 0.0, 1.0);
+
+    Matrix2D<RFLOAT> mat, mat_inv;
+    Localsym_angles2matrix(op, mat,     LOCALSYM_OP_DONT_INVERT);
+    Localsym_angles2matrix(op, mat_inv, LOCALSYM_OP_DO_INVERT);
+
+    // For a rotation matrix R^{-1} = R^T.
+    // Check upper-left 3×3 block: mat_inv ≈ mat^T
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++)
+            EXPECT_NEAR(MAT_ELEM(mat_inv, i, j), MAT_ELEM(mat, j, i), 1e-9);
+}
+
+// ---------------------------------------------------------------------------
+// Localsym_operator2matrix
+// ---------------------------------------------------------------------------
+
+TEST(LocalSymTest, Operator2Matrix_IdentityOperator_IsIdentityLike)
+{
+    Matrix1D<RFLOAT> op;
+    Localsym_composeOperator(op, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0);
+
+    Matrix2D<RFLOAT> mat;
+    Localsym_operator2matrix(op, mat, LOCALSYM_OP_DONT_INVERT);
+
+    ASSERT_EQ(MAT_XSIZE(mat), 4);
+    // Translation columns should be zero for zero translations
+    EXPECT_NEAR(MAT_ELEM(mat, 0, 3), 0.0, TOL);
+    EXPECT_NEAR(MAT_ELEM(mat, 1, 3), 0.0, TOL);
+    EXPECT_NEAR(MAT_ELEM(mat, 2, 3), 0.0, TOL);
+}
+
+TEST(LocalSymTest, Operator2Matrix_NoInvert_TranslationInColumn3)
+{
+    Matrix1D<RFLOAT> op;
+    Localsym_composeOperator(op, 0.0, 0.0, 0.0, 2.0, 3.0, 4.0, 0.9);
+
+    Matrix2D<RFLOAT> mat;
+    Localsym_operator2matrix(op, mat, LOCALSYM_OP_DONT_INVERT);
+
+    EXPECT_NEAR(MAT_ELEM(mat, 0, 3), 2.0, TOL);
+    EXPECT_NEAR(MAT_ELEM(mat, 1, 3), 3.0, TOL);
+    EXPECT_NEAR(MAT_ELEM(mat, 2, 3), 4.0, TOL);
+}
+
+// ---------------------------------------------------------------------------
+// compareOperatorsByCC
+// ---------------------------------------------------------------------------
+
+TEST(LocalSymTest, CompareOperatorsByCC_LowerCCComesFirst)
+{
+    Matrix1D<RFLOAT> op_low, op_high;
+    // CC is stored at position CC_POS (index 6)
+    Localsym_composeOperator(op_low,  0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.2);
+    Localsym_composeOperator(op_high, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.9);
+
+    // compareOperatorsByCC is a strict weak ordering — lower CC should sort first
+    EXPECT_TRUE( compareOperatorsByCC(op_low,  op_high));
+    EXPECT_FALSE(compareOperatorsByCC(op_high, op_low));
+}
+
+TEST(LocalSymTest, CompareOperatorsByCC_EqualCC_NeitherSmaller)
+{
+    Matrix1D<RFLOAT> op1, op2;
+    Localsym_composeOperator(op1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5);
+    Localsym_composeOperator(op2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5);
+
+    EXPECT_FALSE(compareOperatorsByCC(op1, op2));
+    EXPECT_FALSE(compareOperatorsByCC(op2, op1));
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 

@@ -44,7 +44,7 @@ add_test(NAME test_expectation_mpi
     COMMAND mpirun -n 2 $<TARGET_FILE:test_expectation_mpi>
 )
 
-foreach(test_name IN ITEMS test_matrix1d test_matrix2d test_euler test_strings test_ctf test_metadata_table test_transformations test_projector test_fftw test_healpix_sampling test_symmetries test_funcs test_filename test_mask test_tabfuncs test_args test_float16 test_numerical_recipes test_image test_backprojector test_gravis_vectors test_gravis_matrices test_zernike test_optimization test_log test_zio test_macros test_memory test_parallel test_assembly test_local_symmetry test_helix)
+foreach(test_name IN ITEMS test_matrix1d test_matrix2d test_euler test_strings test_ctf test_metadata_table test_transformations test_projector test_fftw test_healpix_sampling test_symmetries test_funcs test_filename test_mask test_tabfuncs test_args test_float16 test_numerical_recipes test_image test_backprojector test_gravis_vectors test_gravis_matrices test_zernike test_optimization test_log test_zio test_macros test_memory test_parallel test_assembly test_local_symmetry test_helix test_cplot2d test_ml_model test_exp_model test_ml_optimiser test_pipeline_control)
     add_executable(${test_name}
         ${CMAKE_SOURCE_DIR}/tests/${test_name}.cpp
     )
@@ -117,6 +117,11 @@ if(COVERAGE)
         COMMAND ${CMAKE_BINARY_DIR}/bin/test_assembly
         COMMAND ${CMAKE_BINARY_DIR}/bin/test_local_symmetry
         COMMAND ${CMAKE_BINARY_DIR}/bin/test_helix
+        COMMAND ${CMAKE_BINARY_DIR}/bin/test_cplot2d
+        COMMAND ${CMAKE_BINARY_DIR}/bin/test_ml_model
+        COMMAND ${CMAKE_BINARY_DIR}/bin/test_exp_model
+        COMMAND ${CMAKE_BINARY_DIR}/bin/test_ml_optimiser
+        COMMAND ${CMAKE_BINARY_DIR}/bin/test_pipeline_control
 
         # 2. Run the MPI test binary (requires mpirun; adjust -n as needed).
         COMMAND mpirun -n 2 ${CMAKE_BINARY_DIR}/bin/test_expectation_mpi
