@@ -1,13 +1,14 @@
 /*
- * Unit tests for pure CPU-side logic in src/acc/cuda/.
+ * Unit tests for src/acc/cuda/.
  *
  * Covers:
  *   cuda_benchmark_utils.cu  — relion_timer::cuda_benchmark_find_id()
  *   cuda_helper_functions.cu — mapWeights()
  *   cuda_settings.h          — compile-time configuration constants
+ *   cuda_kernels/helper.cuh  — GPU kernel launch verification (GPU required)
  *
- * These functions contain no GPU kernel launches and therefore run
- * correctly without a physical GPU being present.
+ * CPU-side tests run without a GPU.
+ * GPU kernel tests skip gracefully when no CUDA device is available.
  */
 
 #include <gtest/gtest.h>
@@ -15,9 +16,13 @@
 #include <string>
 #include <limits>
 #include <sys/stat.h>
+#include <cmath>
 
 // XFLOAT: float (or double with ACC_DOUBLE_PRECISION), no CUDA headers needed
 #include "src/acc/settings.h"
+
+// GPU kernel definitions (inline templates in helper.cuh)
+#include "src/acc/cuda/cuda_kernels/helper.cuh"
 
 // cuda_benchmark_utils — relion_timer class definition
 #include "src/acc/cuda/cuda_benchmark_utils.h"
@@ -246,6 +251,309 @@ TEST(MapWeightsTest, PartialRange_OnlyRangeWeightsMapped)
     EXPECT_EQ(mapped[0], std::numeric_limits<XFLOAT>::lowest()); // trans 0 skipped
     EXPECT_EQ(mapped[1], 20.f);                                   // trans 1 included
     EXPECT_EQ(mapped[2], std::numeric_limits<XFLOAT>::lowest()); // trans 2 skipped
+}
+
+// ---------------------------------------------------------------------------
+// GPU kernel launch verification
+//
+// All tests in this fixture skip automatically when no CUDA device is present.
+// They verify that kernels launch without error and produce correct output
+// for the simplest possible inputs.
+// ---------------------------------------------------------------------------
+
+class GpuKernelTest : public ::testing::Test
+{
+protected:
+    void SetUp() override
+    {
+        int n = 0;
+        cudaGetDeviceCount(&n);
+        if (n == 0)
+            GTEST_SKIP() << "No CUDA device available";
+        cudaSetDevice(0);
+    }
+};
+
+// Helper: allocate device memory, fill from host, return device pointer.
+// Caller must cudaFree the returned pointer.
+static XFLOAT *makeDeviceArray(const std::vector<XFLOAT> &h)
+{
+    XFLOAT *d = nullptr;
+    cudaMalloc(&d, h.size() * sizeof(XFLOAT));
+    cudaMemcpy(d, h.data(), h.size() * sizeof(XFLOAT), cudaMemcpyHostToDevice);
+    return d;
+}
+
+// ---------------------------------------------------------------------------
+// cuda_kernel_exponentiate<XFLOAT>
+// kernel: g_array[i] = exp(g_array[i] + add)
+// ---------------------------------------------------------------------------
+
+TEST_F(GpuKernelTest, Exponentiate_ZeroAdd_YieldsOne)
+{
+    const int N = 8;
+    std::vector<XFLOAT> h(N, 0.f);
+    XFLOAT *d = makeDeviceArray(h);
+
+    int blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    cuda_kernel_exponentiate<XFLOAT><<<blocks, BLOCK_SIZE>>>(d, (XFLOAT)0, (size_t)N);
+    cudaDeviceSynchronize();
+    ASSERT_EQ(cudaGetLastError(), cudaSuccess);
+
+    cudaMemcpy(h.data(), d, N * sizeof(XFLOAT), cudaMemcpyDeviceToHost);
+    for (int i = 0; i < N; ++i)
+        EXPECT_NEAR(h[i], 1.f, 1e-5f);
+    cudaFree(d);
+}
+
+TEST_F(GpuKernelTest, Exponentiate_AddShiftsExponent)
+{
+    // g_array = [0, 0, 0], add = 1.0 → exp(1) for each element
+    const int N = 4;
+    std::vector<XFLOAT> h(N, 0.f);
+    XFLOAT *d = makeDeviceArray(h);
+
+    int blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    cuda_kernel_exponentiate<XFLOAT><<<blocks, BLOCK_SIZE>>>(d, (XFLOAT)1, (size_t)N);
+    cudaDeviceSynchronize();
+    ASSERT_EQ(cudaGetLastError(), cudaSuccess);
+
+    cudaMemcpy(h.data(), d, N * sizeof(XFLOAT), cudaMemcpyDeviceToHost);
+    for (int i = 0; i < N; ++i)
+        EXPECT_NEAR(h[i], std::exp(1.f), 1e-4f);
+    cudaFree(d);
+}
+
+TEST_F(GpuKernelTest, Exponentiate_LargeNegative_YieldsZero)
+{
+    // Values far below -88 (float) / -700 (double) saturate to 0.
+    const int N = 4;
+    std::vector<XFLOAT> h(N, -200.f);
+    XFLOAT *d = makeDeviceArray(h);
+
+    int blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    cuda_kernel_exponentiate<XFLOAT><<<blocks, BLOCK_SIZE>>>(d, (XFLOAT)0, (size_t)N);
+    cudaDeviceSynchronize();
+    ASSERT_EQ(cudaGetLastError(), cudaSuccess);
+
+    cudaMemcpy(h.data(), d, N * sizeof(XFLOAT), cudaMemcpyDeviceToHost);
+    for (int i = 0; i < N; ++i)
+        EXPECT_EQ(h[i], (XFLOAT)0);
+    cudaFree(d);
+}
+
+// ---------------------------------------------------------------------------
+// CudaKernels::cuda_kernel_multi<XFLOAT> — in-place A[i] = A[i]*S
+// ---------------------------------------------------------------------------
+
+TEST_F(GpuKernelTest, Multi_InPlace_ScalesElements)
+{
+    const int N = 6;
+    std::vector<XFLOAT> h = {1.f, 2.f, 3.f, 4.f, 5.f, 6.f};
+    XFLOAT *d = makeDeviceArray(h);
+
+    int blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    CudaKernels::cuda_kernel_multi<XFLOAT><<<blocks, BLOCK_SIZE>>>(d, (XFLOAT)3, N);
+    cudaDeviceSynchronize();
+    ASSERT_EQ(cudaGetLastError(), cudaSuccess);
+
+    cudaMemcpy(h.data(), d, N * sizeof(XFLOAT), cudaMemcpyDeviceToHost);
+    for (int i = 0; i < N; ++i)
+        EXPECT_NEAR(h[i], (i + 1) * 3.f, 1e-5f);
+    cudaFree(d);
+}
+
+TEST_F(GpuKernelTest, Multi_InPlace_ByZero_YieldsZeros)
+{
+    const int N = 4;
+    std::vector<XFLOAT> h = {1.f, 2.f, 3.f, 4.f};
+    XFLOAT *d = makeDeviceArray(h);
+
+    int blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    CudaKernels::cuda_kernel_multi<XFLOAT><<<blocks, BLOCK_SIZE>>>(d, (XFLOAT)0, N);
+    cudaDeviceSynchronize();
+    ASSERT_EQ(cudaGetLastError(), cudaSuccess);
+
+    cudaMemcpy(h.data(), d, N * sizeof(XFLOAT), cudaMemcpyDeviceToHost);
+    for (int i = 0; i < N; ++i)
+        EXPECT_EQ(h[i], (XFLOAT)0);
+    cudaFree(d);
+}
+
+// ---------------------------------------------------------------------------
+// CudaKernels::cuda_kernel_add<XFLOAT> — in-place A[i] += S
+// ---------------------------------------------------------------------------
+
+TEST_F(GpuKernelTest, Add_InPlace_AddsScalar)
+{
+    const int N = 5;
+    std::vector<XFLOAT> h = {0.f, 1.f, 2.f, 3.f, 4.f};
+    XFLOAT *d = makeDeviceArray(h);
+
+    int blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    CudaKernels::cuda_kernel_add<XFLOAT><<<blocks, BLOCK_SIZE>>>(d, (XFLOAT)10, N);
+    cudaDeviceSynchronize();
+    ASSERT_EQ(cudaGetLastError(), cudaSuccess);
+
+    cudaMemcpy(h.data(), d, N * sizeof(XFLOAT), cudaMemcpyDeviceToHost);
+    for (int i = 0; i < N; ++i)
+        EXPECT_NEAR(h[i], i + 10.f, 1e-5f);
+    cudaFree(d);
+}
+
+TEST_F(GpuKernelTest, Add_InPlace_AddZero_Unchanged)
+{
+    const int N = 4;
+    std::vector<XFLOAT> h = {5.f, 6.f, 7.f, 8.f};
+    XFLOAT *d = makeDeviceArray(h);
+
+    int blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    CudaKernels::cuda_kernel_add<XFLOAT><<<blocks, BLOCK_SIZE>>>(d, (XFLOAT)0, N);
+    cudaDeviceSynchronize();
+    ASSERT_EQ(cudaGetLastError(), cudaSuccess);
+
+    cudaMemcpy(h.data(), d, N * sizeof(XFLOAT), cudaMemcpyDeviceToHost);
+    EXPECT_NEAR(h[0], 5.f, 1e-5f);
+    EXPECT_NEAR(h[1], 6.f, 1e-5f);
+    EXPECT_NEAR(h[2], 7.f, 1e-5f);
+    EXPECT_NEAR(h[3], 8.f, 1e-5f);
+    cudaFree(d);
+}
+
+// ---------------------------------------------------------------------------
+// cuda_kernel_multi<XFLOAT> — out-of-place OUT[i] = A[i]*S
+// ---------------------------------------------------------------------------
+
+TEST_F(GpuKernelTest, Multi_OutOfPlace_ScalesIntoOutput)
+{
+    const int N = 4;
+    std::vector<XFLOAT> hA = {1.f, 2.f, 3.f, 4.f};
+    std::vector<XFLOAT> hOut(N, 0.f);
+    XFLOAT *dA   = makeDeviceArray(hA);
+    XFLOAT *dOut = makeDeviceArray(hOut);
+
+    int blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    cuda_kernel_multi<XFLOAT><<<blocks, BLOCK_SIZE>>>(dA, dOut, (XFLOAT)2, N);
+    cudaDeviceSynchronize();
+    ASSERT_EQ(cudaGetLastError(), cudaSuccess);
+
+    cudaMemcpy(hOut.data(), dOut, N * sizeof(XFLOAT), cudaMemcpyDeviceToHost);
+    for (int i = 0; i < N; ++i)
+        EXPECT_NEAR(hOut[i], (i + 1) * 2.f, 1e-5f);
+    cudaFree(dA);
+    cudaFree(dOut);
+}
+
+// ---------------------------------------------------------------------------
+// cuda_kernel_make_eulers_2D<false> — rotation matrix from angles
+// For alpha=0: ca=1, sa=0 → matrix [1,0,0, -0,1,0, 0,0,1] (entries 0,1,2…8)
+// ---------------------------------------------------------------------------
+
+TEST_F(GpuKernelTest, MakeEulers2D_ZeroAngle_IsIdentityLike)
+{
+    const unsigned nOrient = 1;
+    std::vector<XFLOAT> hAlpha(nOrient, 0.f);   // alpha = 0 degrees
+    std::vector<XFLOAT> hEulers(9 * nOrient, 0.f);
+
+    XFLOAT *dAlpha  = makeDeviceArray(hAlpha);
+    XFLOAT *dEulers = makeDeviceArray(hEulers);
+
+    int blocks = (nOrient + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    cuda_kernel_make_eulers_2D<false><<<blocks, BLOCK_SIZE>>>(dAlpha, dEulers, nOrient);
+    cudaDeviceSynchronize();
+    ASSERT_EQ(cudaGetLastError(), cudaSuccess);
+
+    cudaMemcpy(hEulers.data(), dEulers, 9 * nOrient * sizeof(XFLOAT), cudaMemcpyDeviceToHost);
+
+    // For alpha=0: ca=1, sa=0
+    EXPECT_NEAR(hEulers[0],  1.f, 1e-5f);  // cos(0)
+    EXPECT_NEAR(hEulers[1],  0.f, 1e-5f);  // sin(0)
+    EXPECT_NEAR(hEulers[3], -0.f, 1e-5f);  // -sin(0)
+    EXPECT_NEAR(hEulers[4],  1.f, 1e-5f);  // cos(0)
+    EXPECT_NEAR(hEulers[8],  1.f, 1e-5f);  // z-diagonal
+
+    cudaFree(dAlpha);
+    cudaFree(dEulers);
+}
+
+TEST_F(GpuKernelTest, MakeEulers2D_90Degrees_SineAndCosine)
+{
+    const unsigned nOrient = 1;
+    std::vector<XFLOAT> hAlpha(nOrient, 90.f);  // alpha = 90 degrees
+    std::vector<XFLOAT> hEulers(9 * nOrient, 0.f);
+
+    XFLOAT *dAlpha  = makeDeviceArray(hAlpha);
+    XFLOAT *dEulers = makeDeviceArray(hEulers);
+
+    int blocks = (nOrient + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    cuda_kernel_make_eulers_2D<false><<<blocks, BLOCK_SIZE>>>(dAlpha, dEulers, nOrient);
+    cudaDeviceSynchronize();
+    ASSERT_EQ(cudaGetLastError(), cudaSuccess);
+
+    cudaMemcpy(hEulers.data(), dEulers, 9 * nOrient * sizeof(XFLOAT), cudaMemcpyDeviceToHost);
+
+    // For alpha=90: ca=cos(90°)=0, sa=sin(90°)=1
+    EXPECT_NEAR(hEulers[0],  0.f, 1e-5f);  // ca
+    EXPECT_NEAR(hEulers[1],  1.f, 1e-5f);  // sa
+    EXPECT_NEAR(hEulers[3], -1.f, 1e-5f);  // -sa
+    EXPECT_NEAR(hEulers[4],  0.f, 1e-5f);  // ca
+
+    cudaFree(dAlpha);
+    cudaFree(dEulers);
+}
+
+// ---------------------------------------------------------------------------
+// CudaKernels::cuda_kernel_translate2D<XFLOAT>
+// Copies input pixels to output shifted by (dx, dy).
+// ---------------------------------------------------------------------------
+
+TEST_F(GpuKernelTest, Translate2D_ZeroShift_CopiesInput)
+{
+    // 2x2 image, shift (0,0) → output == input
+    const int xdim = 2, ydim = 2;
+    const int N = xdim * ydim;
+    std::vector<XFLOAT> hIn  = {1.f, 2.f, 3.f, 4.f};
+    std::vector<XFLOAT> hOut(N, 0.f);
+    XFLOAT *dIn  = makeDeviceArray(hIn);
+    XFLOAT *dOut = makeDeviceArray(hOut);
+
+    int blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    CudaKernels::cuda_kernel_translate2D<XFLOAT><<<blocks, BLOCK_SIZE>>>(
+        dIn, dOut, N, xdim, ydim, 0, 0);
+    cudaDeviceSynchronize();
+    ASSERT_EQ(cudaGetLastError(), cudaSuccess);
+
+    cudaMemcpy(hOut.data(), dOut, N * sizeof(XFLOAT), cudaMemcpyDeviceToHost);
+    for (int i = 0; i < N; ++i)
+        EXPECT_NEAR(hOut[i], hIn[i], 1e-5f);
+    cudaFree(dIn);
+    cudaFree(dOut);
+}
+
+TEST_F(GpuKernelTest, Translate2D_ShiftRight_MovesPixels)
+{
+    // 4x1 image [1,2,3,4], shift (1,0) → pixel at x maps to x+1
+    // output[1]=1, output[2]=2, output[3]=3; output[0] untouched (0)
+    const int xdim = 4, ydim = 1;
+    const int N = xdim * ydim;
+    std::vector<XFLOAT> hIn  = {1.f, 2.f, 3.f, 4.f};
+    std::vector<XFLOAT> hOut(N, 0.f);
+    XFLOAT *dIn  = makeDeviceArray(hIn);
+    XFLOAT *dOut = makeDeviceArray(hOut);
+
+    int blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    CudaKernels::cuda_kernel_translate2D<XFLOAT><<<blocks, BLOCK_SIZE>>>(
+        dIn, dOut, N, xdim, ydim, 1, 0);
+    cudaDeviceSynchronize();
+    ASSERT_EQ(cudaGetLastError(), cudaSuccess);
+
+    cudaMemcpy(hOut.data(), dOut, N * sizeof(XFLOAT), cudaMemcpyDeviceToHost);
+    EXPECT_NEAR(hOut[0], 0.f, 1e-5f);  // no source maps here (dx=1 wraps out of bounds at x=3)
+    EXPECT_NEAR(hOut[1], 1.f, 1e-5f);  // pixel 0 shifted to index 1
+    EXPECT_NEAR(hOut[2], 2.f, 1e-5f);
+    EXPECT_NEAR(hOut[3], 3.f, 1e-5f);
+    cudaFree(dIn);
+    cudaFree(dOut);
 }
 
 // ---------------------------------------------------------------------------
