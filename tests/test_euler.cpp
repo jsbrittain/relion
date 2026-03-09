@@ -26,6 +26,7 @@
 #include "src/euler.h"
 #include "src/matrix2d.h"
 #include "src/matrix1d.h"
+#include "src/error.h"
 
 static constexpr double EPS = 1e-5;
 
@@ -455,6 +456,25 @@ TEST(EulerTest, Direction_NegZAxis_Beta180)
     Euler_direction2angles(v, alpha, beta);
 
     EXPECT_NEAR(beta, 180.0, EPS);
+}
+
+// ---------------------------------------------------------------------------
+// 15. Euler_matrix2angles error: non-3×3 matrix throws
+// ---------------------------------------------------------------------------
+TEST(EulerTest, Matrix2Angles_Non3x3_Throws)
+{
+    Matrix2D<RFLOAT> A;
+    A.resize(2, 2); // 2×2 is not a valid Euler matrix
+    RFLOAT rrot, rtilt, rpsi;
+    EXPECT_THROW(Euler_matrix2angles(A, rrot, rtilt, rpsi), RelionError);
+}
+
+TEST(EulerTest, Matrix2Angles_4x4_Throws)
+{
+    Matrix2D<RFLOAT> A;
+    A.resize(4, 4);
+    RFLOAT rrot, rtilt, rpsi;
+    EXPECT_THROW(Euler_matrix2angles(A, rrot, rtilt, rpsi), RelionError);
 }
 
 // ---------------------------------------------------------------------------

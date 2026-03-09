@@ -370,6 +370,16 @@ TEST(CPlot2DTest, AddDataSet_SingleYVector)
     // No crash
 }
 
+TEST(CPlot2DTest, SetTitle_IsCallable)
+{
+    CPlot2D plot;
+    // SetTitle has no corresponding getter; verify it does not crash.
+    plot.SetTitle("My Plot Title");
+    plot.SetTitle("");            // empty string
+    plot.SetTitle("Second Title"); // overwrite
+    // No crash is the assertion
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------

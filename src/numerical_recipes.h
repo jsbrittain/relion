@@ -92,7 +92,7 @@ void powell(RFLOAT *p, RFLOAT *xi, int n, RFLOAT ftol, int &iter,
 
 // Working with matrices ---------------------------------------------------
 // LU decomposition
-#define TINY 1.0e-20;
+#define TINY 1.0e-20
 /* Chapter 2 Section 3: LU DECOMPOSITION */
 template <class T>
 void ludcmp(T *a, int n, int *indx, T *d)

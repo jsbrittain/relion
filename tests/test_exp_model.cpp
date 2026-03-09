@@ -280,6 +280,51 @@ TEST(ExperimentTest, DivideParticles_PreAssigned_CountsCorrectly)
 }
 
 // ---------------------------------------------------------------------------
+// compareOpticsGroupsParticles (private struct) — tested indirectly via
+// randomiseParticlesOrder(), which stable_sorts sorted_idx by optics_group.
+// The struct constructor is invoked as the comparator object; operator() is
+// called by std::stable_sort to order pairs of particle indices.
+// ---------------------------------------------------------------------------
+
+TEST(ExperimentTest, RandomiseParticlesOrder_SortsByOpticsGroup)
+{
+    // Create 4 particles: optics groups 1, 0, 1, 0 (deliberately out of order)
+    Experiment exp;
+    for (int i = 0; i < 4; i++)
+    {
+        ExpParticle p;
+        p.id            = i;
+        p.random_subset = 0; // not pre-assigned
+        p.group_id      = 0;
+        p.optics_group  = (i % 2 == 0) ? 1 : 0; // optics groups: 1,0,1,0
+        exp.particles.push_back(p);
+        exp.sorted_idx.push_back(i);
+    }
+    // Add MDimg rows
+    for (int i = 0; i < 4; i++)
+        exp.MDimg.addObject();
+
+    // divideParticlesInRandomHalves assigns random subsets then counts
+    exp.divideParticlesInRandomHalves(42, false);
+
+    // randomiseParticlesOrder with do_split_random_halves=false:
+    //   shuffles sorted_idx, then stable_sorts the entire range by optics_group
+    //   — exercises compareOpticsGroupsParticles constructor and operator().
+    exp.randomiseParticlesOrder(42, false);
+
+    // After the sort the sorted_idx must be non-decreasing in optics_group.
+    for (int k = 1; k < (int)exp.sorted_idx.size(); k++)
+    {
+        int prev_og = exp.particles[exp.sorted_idx[k-1]].optics_group;
+        int curr_og = exp.particles[exp.sorted_idx[k  ]].optics_group;
+        EXPECT_LE(prev_og, curr_og)
+            << "sorted_idx[" << k-1 << "]=" << exp.sorted_idx[k-1]
+            << " (og=" << prev_og << ") > sorted_idx[" << k << "]="
+            << exp.sorted_idx[k] << " (og=" << curr_og << ")";
+    }
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 

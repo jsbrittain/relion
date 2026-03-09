@@ -93,6 +93,24 @@ TEST(MlOptimiserTest, AccThreadName_DifferentThreadsDistinct)
 }
 
 // ---------------------------------------------------------------------------
+// gpuDeviceShareAt()
+// ---------------------------------------------------------------------------
+
+TEST(MlOptimiserTest, GpuDeviceShareAt_ReturnsOne)
+{
+    MlOptimiser opt;
+    // Base-class implementation always returns 1 (overridden in MpiOptimiser)
+    EXPECT_EQ(opt.gpuDeviceShareAt(0), 1);
+}
+
+TEST(MlOptimiserTest, GpuDeviceShareAt_AnyIndexReturnsOne)
+{
+    MlOptimiser opt;
+    EXPECT_EQ(opt.gpuDeviceShareAt(5),  1);
+    EXPECT_EQ(opt.gpuDeviceShareAt(-1), 1);
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 

@@ -38,6 +38,7 @@
 #include "src/matrix1d.h"
 #include "src/matrix2d.h"
 #include "src/multidim_array.h"
+#include "src/error.h"
 
 static const double EPS = 1e-9;
 
@@ -679,6 +680,43 @@ TEST(TransformationsTest, RadialAverage_ZeroVolume_ZeroProfile)
     for (int i = 0; i < (int)radial_mean.xdim; i++)
         if (radial_count(i) > 0)
             EXPECT_NEAR(radial_mean(i), 0.0, 1e-9);
+}
+
+// ---------------------------------------------------------------------------
+// Error-path tests
+// ---------------------------------------------------------------------------
+
+// rotation3DMatrix: unknown axis character → REPORT_ERROR → throws RelionError
+TEST(TransformationsTest, Rotation3DMatrix_InvalidAxis_Throws)
+{
+    Matrix2D<RFLOAT> R;
+    EXPECT_THROW(rotation3DMatrix(45.0, 'W', R, /*homogeneous=*/false), RelionError);
+    EXPECT_THROW(rotation3DMatrix(90.0, 'A', R, /*homogeneous=*/true),  RelionError);
+}
+
+// alignWithZ: axis vector must be in R3 (size == 3)
+TEST(TransformationsTest, AlignWithZ_Non3DAxis_Throws)
+{
+    Matrix2D<RFLOAT> A;
+    Matrix1D<RFLOAT> v2 = vectorR2(1.0, 0.0); // 2-element
+    EXPECT_THROW(alignWithZ(v2, A, /*homogeneous=*/false), RelionError);
+}
+
+// translation3DMatrix(vector): vector must be in R3 (size == 3)
+TEST(TransformationsTest, Translation3DMatrix_Non3DVector_Throws)
+{
+    Matrix2D<RFLOAT> T;
+    Matrix1D<RFLOAT> v2 = vectorR2(1.0, 2.0); // 2-element
+    EXPECT_THROW(translation3DMatrix(v2, T), RelionError);
+}
+
+// scale3DMatrix: scale vector must be in R3 (size == 3)
+TEST(TransformationsTest, Scale3DMatrix_Non3DVector_Throws)
+{
+    Matrix2D<RFLOAT> S;
+    Matrix1D<RFLOAT> sc2 = vectorR2(2.0, 3.0); // 2-element
+    EXPECT_THROW(scale3DMatrix(sc2, S, /*homogeneous=*/false), RelionError);
+    EXPECT_THROW(scale3DMatrix(sc2, S, /*homogeneous=*/true),  RelionError);
 }
 
 // ---------------------------------------------------------------------------

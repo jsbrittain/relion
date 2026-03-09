@@ -407,6 +407,51 @@ TEST(BesselRecurrenceTest, Bessi3_SatisfiesRecurrence)
     EXPECT_NEAR(bessi3(x), expected, EPS);
 }
 
+// --------------------------------- ludcmp: singular (zero-row) → exit(1) --
+// nrerror() calls exit(1); use EXPECT_EXIT to catch the process death.
+
+TEST(LudcmpTest, ZeroRowMatrix_ExitsWithError)
+{
+    // Row 2 is all zeros → nrerror("Singular matrix in routine LUDCMP") → exit(1)
+    EXPECT_EXIT(
+    {
+        const int n = 2;
+        double a[7] = {0};
+        a[1*n+1] = 2.0; a[1*n+2] = 1.0;
+        // row 2 stays zero
+        int indx[n+1] = {0};
+        double d = 0;
+        ludcmp(a, n, indx, &d);
+    },
+    ::testing::ExitedWithCode(1),
+    "Singular matrix");
+}
+
+// --------------------------------- ludcmp: rank-deficient → TINY fix -------
+// A proportional-row matrix (rank < n) does NOT have a zero row, so the
+// "Singular matrix" nrerror is NOT triggered.  Instead, the diagonal becomes
+// exactly 0 during elimination and the TINY substitution prevents a
+// division-by-zero.  The call must complete without crashing.
+
+TEST(LudcmpTest, RankDeficientMatrix_TinyFix_NoCrash)
+{
+    // [[2, 2], [1, 1]]: rows are proportional → during LU elimination the
+    // (2,2) pivot reduces to 0 and is replaced by TINY.
+    const int n = 2;
+    double a[7] = {0};
+    a[1*n+1] = 2.0; a[1*n+2] = 2.0;
+    a[2*n+1] = 1.0; a[2*n+2] = 1.0;
+
+    int indx[n+1] = {0};
+    double d = 0;
+    // Must complete without crash or exit; the TINY path keeps a[j*n+j] != 0.
+    ludcmp(a, n, indx, &d);
+
+    // After ludcmp the diagonal entry a[2*n+2] must equal TINY (≈ 1e-20),
+    // confirming the branch was taken.
+    EXPECT_NEAR(a[2*n+2], 1.0e-20, 1.0e-25);
+}
+
 int main(int argc, char **argv)
 {
     ::testing::InitGoogleTest(&argc, argv);
