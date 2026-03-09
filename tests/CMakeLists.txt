@@ -62,6 +62,29 @@ foreach(test_name IN ITEMS test_matrix1d test_matrix2d test_euler test_strings t
     add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
 
+# ----------------------------------------------------------------CUDA-ONLY TESTS--
+# Compiled with nvcc; tests CPU-side logic in src/acc/cuda/ (no GPU required
+# at runtime — none of the tested functions launch CUDA kernels).
+if(CUDA)
+    cuda_add_executable(test_acc_cuda
+        ${CMAKE_SOURCE_DIR}/tests/test_acc_cuda.cu
+    )
+    add_dependencies(test_acc_cuda relion_lib)
+    target_compile_definitions(test_acc_cuda PRIVATE RELION_UNIT_TESTS)
+    target_include_directories(test_acc_cuda PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${FFTW_INCLUDES}
+        ${CUDA_INCLUDE_DIRS}
+    )
+    target_link_libraries(test_acc_cuda
+        GTest::gtest
+        relion_lib
+        ${FFTW_LIBRARIES}
+        ${CUDA_CUFFT_LIBRARIES}
+    )
+    add_test(NAME test_acc_cuda COMMAND test_acc_cuda)
+endif()
+
 # ----------------------------------------------------------------COVERAGE TARGET--
 # Requires: COVERAGE=ON at cmake time, lcov >= 1.14, genhtml (part of lcov).
 # Usage:
@@ -123,7 +146,10 @@ if(COVERAGE)
         COMMAND ${CMAKE_BINARY_DIR}/bin/test_ml_optimiser
         COMMAND ${CMAKE_BINARY_DIR}/bin/test_pipeline_control
 
-        # 2. Run the MPI test binary (requires mpirun; adjust -n as needed).
+        # 2. Run CUDA test (no GPU required; only CPU-side logic is tested).
+        COMMAND ${CMAKE_BINARY_DIR}/bin/test_acc_cuda
+
+        # 3. Run the MPI test binary (requires mpirun; adjust -n as needed).
         COMMAND mpirun -n 2 ${CMAKE_BINARY_DIR}/bin/test_expectation_mpi
 
         # 3. Collect coverage counters into a single .info file.
