@@ -133,6 +133,14 @@ TEST_F(PipelineControlTest, Exit_InvalidMode_Returns12)
     EXPECT_EQ(ret, 12);
 }
 
+TEST_F(PipelineControlTest, Exit_CannotTouchFile_Returns13)
+{
+    // Point to a directory that does not exist: open() will fail → return 13
+    pipeline_control_outputname = "/nonexistent_dir_relion_test_xyz/prefix_";
+    int ret = pipeline_control_relion_exit(0);
+    EXPECT_EQ(ret, 13);
+}
+
 // ---------------------------------------------------------------------------
 // pipeline_control_check_abort_job
 // ---------------------------------------------------------------------------

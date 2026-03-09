@@ -104,6 +104,15 @@ TEST(ParallelTest, WhichGroup_ConsistentWithDivideEqually)
     }
 }
 
+TEST(ParallelTest, WhichGroup_OutOfRange_ReturnsMinusOne)
+{
+    // myself >= N: not in any group's range → fallthrough return -1
+    EXPECT_EQ(divide_equally_which_group(10, 2, 10), -1);
+    EXPECT_EQ(divide_equally_which_group(10, 2, 99), -1);
+    // Negative index: also not in any group's [0, N-1] range
+    EXPECT_EQ(divide_equally_which_group(10, 2, -1), -1);
+}
+
 // ---------------------------------------------------------------------------
 // ThreadTaskDistributor – serial single-thread usage
 // ---------------------------------------------------------------------------
@@ -177,6 +186,29 @@ TEST(ParallelTest, ThreadTaskDistributor_SetAssignedTasks)
     bool got = td.getTasks(first, last);
     EXPECT_TRUE(got);
     EXPECT_EQ(first, (size_t)6);
+}
+
+TEST(ParallelTest, ThreadTaskDistributor_SetAssignedTasks_OutOfRange_ReturnsFalse)
+{
+    // tasks >= numberOfTasks triggers the early return false
+    ThreadTaskDistributor td(10, 3);
+    EXPECT_FALSE(td.setAssignedTasks(10)); // exactly equal to numberOfTasks
+    EXPECT_FALSE(td.setAssignedTasks(99)); // well beyond range
+    // In-range values still succeed
+    EXPECT_TRUE(td.setAssignedTasks(0));
+    EXPECT_TRUE(td.setAssignedTasks(9));
+}
+
+TEST(ParallelTest, ParallelTaskDistributor_Resize_InvalidArgs_Throws)
+{
+    // bSize == 0
+    EXPECT_THROW(ThreadTaskDistributor(10, 0),  RelionError);
+    // nTasks == 0
+    EXPECT_THROW(ThreadTaskDistributor(0, 1),   RelionError);
+    // bSize > nTasks
+    EXPECT_THROW(ThreadTaskDistributor(5, 10),  RelionError);
+    // Valid call must not throw
+    EXPECT_NO_THROW(ThreadTaskDistributor(10, 5));
 }
 
 // ---------------------------------------------------------------------------

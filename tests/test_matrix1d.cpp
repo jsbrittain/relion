@@ -41,6 +41,7 @@
 #include <gtest/gtest.h>
 #include <cmath>
 #include "src/matrix1d.h"
+#include "src/error.h"
 
 using Vec = Matrix1D<double>;
 
@@ -591,6 +592,169 @@ TEST(Matrix1DTest, MaxIndexEmptyReturnsMinusOne)
     int idx;
     v.maxIndex(idx);
     EXPECT_EQ(idx, -1);
+}
+
+// ---------------------------------------------------------------------------
+// 28. minIndex when vdim==0 → returns -1
+// ---------------------------------------------------------------------------
+TEST(Matrix1DTest, MinIndexEmptyReturnsMinusOne)
+{
+    Vec v;
+    int idx;
+    v.minIndex(idx);
+    EXPECT_EQ(idx, -1);
+}
+
+// ---------------------------------------------------------------------------
+// 29. resize(dim <= 0) → calls clear(), vdim becomes 0
+// ---------------------------------------------------------------------------
+TEST(Matrix1DTest, ResizeZero_ClearsVector)
+{
+    Vec v(5);
+    v(0) = 1.0;
+    v.resize(0);
+    EXPECT_EQ(v.vdim, 0);
+    EXPECT_EQ(v.vdata, nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// 30. selfROUND() — rounds each element to nearest integer
+// ---------------------------------------------------------------------------
+TEST(Matrix1DTest, SelfROUND_RoundsElements)
+{
+    Vec v(4);
+    v(0) = 1.4; v(1) = 1.6; v(2) = -1.4; v(3) = -1.6;
+    v.selfROUND();
+    EXPECT_NEAR(v(0),  1.0, EPS);
+    EXPECT_NEAR(v(1),  2.0, EPS);
+    EXPECT_NEAR(v(2), -1.0, EPS);
+    EXPECT_NEAR(v(3), -2.0, EPS);
+}
+
+// ---------------------------------------------------------------------------
+// 31. typeCast when vdim==0 → output is cleared
+// ---------------------------------------------------------------------------
+TEST(Matrix1DTest, TypeCast_EmptyInput_ClearsOutput)
+{
+    Matrix1D<int> empty_iv; // vdim == 0
+    Vec dv(3);
+    dv(0) = 1.0; dv(1) = 2.0; dv(2) = 3.0;
+    typeCast(empty_iv, dv);
+    EXPECT_EQ(dv.vdim, 0);
+}
+
+// ---------------------------------------------------------------------------
+// 32. REPORT_ERROR: size-mismatch in binary vector operators
+// ---------------------------------------------------------------------------
+TEST(Matrix1DTest, VectorAdd_SizeMismatch_Throws)
+{
+    Vec a(3), b(2);
+    EXPECT_THROW(a + b, RelionError);
+}
+
+TEST(Matrix1DTest, VectorSubtract_SizeMismatch_Throws)
+{
+    Vec a(3), b(2);
+    EXPECT_THROW(a - b, RelionError);
+}
+
+TEST(Matrix1DTest, VectorMultiply_SizeMismatch_Throws)
+{
+    Vec a(3), b(2);
+    EXPECT_THROW(a * b, RelionError);
+}
+
+TEST(Matrix1DTest, VectorDivide_SizeMismatch_Throws)
+{
+    Vec a(3), b(2);
+    EXPECT_THROW(a / b, RelionError);
+}
+
+TEST(Matrix1DTest, VectorPlusEquals_SizeMismatch_Throws)
+{
+    Vec a(3), b(2);
+    EXPECT_THROW(a += b, RelionError);
+}
+
+TEST(Matrix1DTest, VectorMinusEquals_SizeMismatch_Throws)
+{
+    Vec a(3), b(2);
+    EXPECT_THROW(a -= b, RelionError);
+}
+
+TEST(Matrix1DTest, VectorTimesEquals_SizeMismatch_Throws)
+{
+    Vec a(3), b(2);
+    EXPECT_THROW(a *= b, RelionError);
+}
+
+TEST(Matrix1DTest, VectorDivideEquals_SizeMismatch_Throws)
+{
+    Vec a(3), b(2);
+    EXPECT_THROW(a /= b, RelionError);
+}
+
+// ---------------------------------------------------------------------------
+// 33. REPORT_ERROR: dotProduct different sizes/shapes
+// ---------------------------------------------------------------------------
+TEST(Matrix1DTest, DotProduct_SizeMismatch_Throws)
+{
+    Vec a(3), b(2);
+    EXPECT_THROW(dotProduct(a, b), RelionError);
+}
+
+// ---------------------------------------------------------------------------
+// 34. REPORT_ERROR: vectorProduct non-R3 or different orientations
+// ---------------------------------------------------------------------------
+TEST(Matrix1DTest, VectorProduct_NonR3_Throws)
+{
+    Vec a(2), b(2); // not R3
+    EXPECT_THROW(vectorProduct(a, b), RelionError);
+}
+
+TEST(Matrix1DTest, VectorProduct_DifferentOrientation_Throws)
+{
+    Vec row = vectorR3(1.0, 0.0, 0.0);
+    Vec col = vectorR3(0.0, 1.0, 0.0);
+    row.setRow();
+    col.setCol();
+    EXPECT_THROW(vectorProduct(row, col), RelionError);
+}
+
+// ---------------------------------------------------------------------------
+// 35. REPORT_ERROR: sortTwoVectors different shapes
+// ---------------------------------------------------------------------------
+TEST(Matrix1DTest, SortTwoVectors_SizeMismatch_Throws)
+{
+    Vec a(3), b(2);
+    EXPECT_THROW(sortTwoVectors(a, b), RelionError);
+}
+
+// ---------------------------------------------------------------------------
+// 36. sortTwoVectors green path — for loop swaps element-wise so v1 ≤ v2
+// ---------------------------------------------------------------------------
+TEST(Matrix1DTest, SortTwoVectors_SortsElementWise)
+{
+    Vec a(3), b(3);
+    a(0) = 3.0; a(1) = 1.0; a(2) = 4.0;
+    b(0) = 1.0; b(1) = 5.0; b(2) = 1.0;
+
+    sortTwoVectors(a, b);
+
+    // After sorting: a[j] = min, b[j] = max for each j
+    EXPECT_NEAR(a(0), 1.0, EPS);  EXPECT_NEAR(b(0), 3.0, EPS);
+    EXPECT_NEAR(a(1), 1.0, EPS);  EXPECT_NEAR(b(1), 5.0, EPS);
+    EXPECT_NEAR(a(2), 1.0, EPS);  EXPECT_NEAR(b(2), 4.0, EPS);
+}
+
+TEST(Matrix1DTest, SortTwoVectors_AlreadySorted_Unchanged)
+{
+    Vec a(2), b(2);
+    a(0) = 1.0; a(1) = 2.0;
+    b(0) = 3.0; b(1) = 4.0;
+    sortTwoVectors(a, b);
+    EXPECT_NEAR(a(0), 1.0, EPS);  EXPECT_NEAR(b(0), 3.0, EPS);
+    EXPECT_NEAR(a(1), 2.0, EPS);  EXPECT_NEAR(b(1), 4.0, EPS);
 }
 
 // ---------------------------------------------------------------------------

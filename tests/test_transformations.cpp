@@ -719,6 +719,150 @@ TEST(TransformationsTest, Scale3DMatrix_Non3DVector_Throws)
     EXPECT_THROW(scale3DMatrix(sc2, S, /*homogeneous=*/true),  RelionError);
 }
 
+// applyGeometry: input and output arrays are the same object → REPORT_ERROR
+TEST(TransformationsTest, ApplyGeometry_SameArray_Throws)
+{
+    MultidimArray<RFLOAT> arr = makeConstant2D(4, 4, 1.0);
+    Matrix2D<RFLOAT> R;
+    rotation2DMatrix(45.0, R, /*homogeneous=*/true); // 3x3, non-identity
+    EXPECT_THROW(applyGeometry(arr, arr, R, IS_NOT_INV, DONT_WRAP), RelionError);
+}
+
+// applyGeometry: 2D input but matrix is not 3x3 → REPORT_ERROR
+TEST(TransformationsTest, ApplyGeometry_2D_WrongMatrixSize_Throws)
+{
+    Matrix2D<RFLOAT> R4;
+    R4.initIdentity(4); // 4x4, but 2D input needs 3x3
+    // Make it non-identity to avoid the identity fast-path
+    MAT_ELEM(R4, 0, 1) = 0.5;
+    MultidimArray<RFLOAT> arr2d = makeConstant2D(4, 4, 1.0);
+    MultidimArray<RFLOAT> out;
+    EXPECT_THROW(applyGeometry(arr2d, out, R4, IS_NOT_INV, DONT_WRAP), RelionError);
+}
+
+// applyGeometry: 3D input but matrix is not 4x4 → REPORT_ERROR
+TEST(TransformationsTest, ApplyGeometry_3D_WrongMatrixSize_Throws)
+{
+    Matrix2D<RFLOAT> R3;
+    R3.initIdentity(3); // 3x3, but 3D input needs 4x4
+    MAT_ELEM(R3, 0, 1) = 0.5; // non-identity to avoid fast-path
+    MultidimArray<RFLOAT> arr3d = makeConstant3D(4, 4, 4, 1.0);
+    MultidimArray<RFLOAT> out;
+    EXPECT_THROW(applyGeometry(arr3d, out, R3, IS_NOT_INV, DONT_WRAP), RelionError);
+}
+
+// applyGeometry: XSIZE(V1)==0 with non-identity matrix → V2.clear()
+TEST(TransformationsTest, ApplyGeometry_EmptyInput_ClearsOutput)
+{
+    Matrix2D<RFLOAT> R;
+    rotation2DMatrix(45.0, R, /*homogeneous=*/true); // non-identity 3x3
+    MultidimArray<RFLOAT> empty_in; // default-constructed: all dims 0, XSIZE==0
+    MultidimArray<RFLOAT> V2;
+    V2.resize(4, 4); // non-empty to confirm clear() is called
+    applyGeometry(empty_in, V2, R, IS_NOT_INV, DONT_WRAP);
+    EXPECT_EQ(XSIZE(V2), 0u);
+}
+
+// applyGeometry 3D DONT_WRAP: out-of-bounds voxels → interp=false → outside value
+TEST(TransformationsTest, ApplyGeometry3D_DontWrap_OutOfBounds_GetsOutsideValue)
+{
+    // Large translation so all mapped source coords are outside the volume
+    Matrix2D<RFLOAT> T;
+    translation3DMatrix(100.0, 100.0, 100.0, T); // 4x4 homogeneous
+    MultidimArray<RFLOAT> in = makeConstant3D(4, 4, 4, 5.0);
+    MultidimArray<RFLOAT> out;
+    const RFLOAT outside = -999.0;
+    applyGeometry(in, out, T, IS_NOT_INV, DONT_WRAP, outside);
+    for (int k = 0; k < (int)out.zdim; k++)
+        for (int i = 0; i < (int)out.ydim; i++)
+            for (int j = 0; j < (int)out.xdim; j++)
+                EXPECT_NEAR(DIRECT_A3D_ELEM(out, k, i, j), outside, 1e-6);
+}
+
+// selfApplyGeometry: in-place result matches applyGeometry
+TEST(TransformationsTest, SelfApplyGeometry_MatchesApplyGeometry)
+{
+    Matrix2D<RFLOAT> R;
+    rotation3DMatrix(90.0, 'Z', R, /*homogeneous=*/true); // 4x4
+    const RFLOAT val = 3.0;
+    MultidimArray<RFLOAT> original = makeConstant3D(4, 4, 4, val);
+
+    MultidimArray<RFLOAT> expected;
+    applyGeometry(original, expected, R, IS_NOT_INV, WRAP, val);
+
+    MultidimArray<RFLOAT> self = original;
+    selfApplyGeometry(self, R, IS_NOT_INV, WRAP, val);
+
+    for (int k = 0; k < (int)self.zdim; k++)
+        for (int i = 0; i < (int)self.ydim; i++)
+            for (int j = 0; j < (int)self.xdim; j++)
+                EXPECT_NEAR(DIRECT_A3D_ELEM(self, k, i, j),
+                            DIRECT_A3D_ELEM(expected, k, i, j), 1e-9);
+}
+
+// rotate: 1D array → REPORT_ERROR
+TEST(TransformationsTest, Rotate_1DArray_Throws)
+{
+    MultidimArray<RFLOAT> arr1d;
+    arr1d.resize(5); // 1D: xdim=5, ydim=1, zdim=1 → getDim()==1
+    MultidimArray<RFLOAT> out;
+    EXPECT_THROW(rotate(arr1d, out, 45.0), RelionError);
+}
+
+// translate: 1D array → REPORT_ERROR
+TEST(TransformationsTest, Translate_1DArray_Throws)
+{
+    MultidimArray<RFLOAT> arr1d;
+    arr1d.resize(5);
+    MultidimArray<RFLOAT> out;
+    Matrix1D<RFLOAT> v = vectorR3(1.0, 0.0, 0.0);
+    EXPECT_THROW(translate(arr1d, out, v), RelionError);
+}
+
+// scaleToSize: 1D array → REPORT_ERROR
+TEST(TransformationsTest, ScaleToSize_1DArray_Throws)
+{
+    MultidimArray<RFLOAT> arr1d;
+    arr1d.resize(5);
+    MultidimArray<RFLOAT> out;
+    EXPECT_THROW(scaleToSize(arr1d, out, 10, 10, 1), RelionError);
+}
+
+// radialAverage: 2-element center → auto-resized to 3 (line 898)
+TEST(TransformationsTest, RadialAverage_2ElementCenter_AutoResizesTo3)
+{
+    MultidimArray<RFLOAT> vol = makeConstant3D(6, 6, 6, 5.0);
+    Matrix1D<int> center(2); // only 2 elements
+    center.initZeros();
+    MultidimArray<RFLOAT> radial_mean;
+    MultidimArray<int>    radial_count;
+    radialAverage(vol, center, radial_mean, radial_count);
+    EXPECT_GE((int)center.vdim, 3); // must have been resized
+    EXPECT_GT(radial_mean.xdim, 0u);
+}
+
+// radialAverage: rounding=true → dim is one larger, profile still uniform
+TEST(TransformationsTest, RadialAverage_RoundingTrue_DimIncreasedByOne)
+{
+    const RFLOAT val = 5.0;
+    MultidimArray<RFLOAT> vol = makeConstant3D(6, 6, 6, val);
+    Matrix1D<int> center(3);
+    center.initZeros();
+
+    MultidimArray<RFLOAT> rm_round, rm_floor;
+    MultidimArray<int>    rc_round, rc_floor;
+    radialAverage(vol, center, rm_round, rc_round, /*rounding=*/true);
+    radialAverage(vol, center, rm_floor, rc_floor, /*rounding=*/false);
+
+    // rounding=true adds one to dim
+    EXPECT_EQ(rm_round.xdim, rm_floor.xdim + 1);
+
+    // Populated shells should still equal the uniform value
+    for (int i = 0; i < (int)rm_round.xdim; i++)
+        if (rc_round(i) > 0)
+            EXPECT_NEAR(rm_round(i), val, 1e-4f) << "shell " << i;
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------

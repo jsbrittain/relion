@@ -184,6 +184,72 @@ TEST(Float16Test, SweepOfValues_RelativeError)
     }
 }
 
+// ---- Rounding carry: fractional &= 0x007fffffu; exponent++ (float16.h:123-124) ----
+//
+// When the 23-bit float32 mantissa, after the rounding increment (+1<<12),
+// overflows into bit 23, the code does two things:
+//   (a) fractional &= 0x007fffffu  — clears the carry bit so it does not leak
+//       into the float16 exponent field when the mantissa is later shifted by 13.
+//   (b) exponent++                 — promotes the value to the next power of two,
+//       as required by IEEE 754: 1.111...1 rounded up == 10.000...0.
+//
+// The carry fires when fractional >= 0x7FF000, because
+//   0x7FF000 + 0x001000 (rounding constant) = 0x800000 (bit 23 set).
+// After the carry the remaining mantissa bits always fall below bit 13,
+// so (fractional & 0x007fffffu) >> 13 == 0, and the float16 fractional is zero.
+// The result is therefore always an exact power of two (mantissa == 1.0).
+//
+// Reference input: 1.99951171875 = 4095/2048 = 1 + 2047/2048, which has
+//   float32 biased exponent = 127 (actual = 0), fractional = 0x7FF000.
+
+TEST(Float16Test, RoundingCarry_ExponentIncremented)
+{
+    // 1.99951171875f has float32 biased exp=127, frac=0x7FF000 (minimum
+    // carry-triggering fractional: bits [22:12] all set).
+    // Rounding: 0x7FF000 + 0x001000 = 0x800000 → bit 23 set → carry fires.
+    //   frac &= 0x007fffff → 0x000000    (carry bit cleared)
+    //   exponent++         → 128         (actual exponent 1)
+    // float16 result: biased exp = 128+15-127 = 16, frac = 0 → value = 2.0.
+    float16 h = float2half(1.99951171875f);
+    EXPECT_EQ(h & 0x7C00u, 16u << 10); // exponent field incremented to 16
+    EXPECT_EQ(h & 0x03FFu, 0u);         // fractional field zero after carry
+    EXPECT_EQ(h & 0x8000u, 0u);         // positive
+    EXPECT_NEAR(half2float(h), 2.0f, 1e-6f);
+}
+
+TEST(Float16Test, RoundingNoCarry_BelowCarryThreshold)
+{
+    // 1.9990234375f = 1 + 1023/1024 has float32 biased exp=127, frac=0x7FE000
+    // — one step below the carry threshold.
+    // Rounding: 0x7FE000 + 0x001000 = 0x7FF000 < 0x800000 → no carry.
+    //   exponent stays at 127, float16 biased exp = 15.
+    //   frac >> 13 = 0x7FF000 >> 13 = 0x3FF (all 10 float16 mantissa bits set).
+    // Contrast with the carry case above: same input exponent, but the float16
+    // exponent is 15 (not 16) and the fractional is 0x3FF (not 0).
+    float16 h = float2half(1.9990234375f);
+    EXPECT_EQ(h & 0x7C00u, 15u << 10); // exponent unchanged at 15
+    EXPECT_EQ(h & 0x03FFu, 0x3FFu);    // fractional = all 10 bits set
+    EXPECT_NEAR(half2float(h), 1.9990234375f, 1e-6f);
+}
+
+TEST(Float16Test, RoundingCarry_AllOnesManitssa)
+{
+    // Construct a float32 with biased exp=127 and fractional=0x7FFFFF
+    // (all 23 mantissa bits set — the float32 value nearest to 2.0 from below).
+    // Rounding: 0x7FFFFF + 0x001000 = 0x800FFF → bit 23 set → carry fires.
+    //   frac &= 0x007fffff → 0x000FFF  (low 12 bits remain, but >> 13 gives 0)
+    //   exponent++ → 128; float16 = 2.0.
+    // This confirms that (a) the mask correctly isolates only bits [22:0]
+    // and (b) the remaining fractional bits [11:0] do not contribute to the
+    // float16 mantissa after the >> 13 shift.
+    float32 f;
+    f.i = (127u << 23) | 0x7FFFFFu;
+    float16 h = float2half(f.f);
+    EXPECT_EQ(h & 0x7C00u, 16u << 10); // exponent incremented to 16
+    EXPECT_EQ(h & 0x03FFu, 0u);         // fractional zero despite non-zero low bits
+    EXPECT_NEAR(half2float(h), 2.0f, 1e-6f);
+}
+
 int main(int argc, char **argv)
 {
     ::testing::InitGoogleTest(&argc, argv);
