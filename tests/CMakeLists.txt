@@ -44,7 +44,7 @@ add_test(NAME test_expectation_mpi
     COMMAND mpirun -n 2 $<TARGET_FILE:test_expectation_mpi>
 )
 
-foreach(test_name IN ITEMS test_matrix1d test_matrix2d test_euler test_strings test_ctf test_metadata_table test_transformations test_projector test_fftw test_healpix_sampling test_symmetries test_funcs test_filename test_mask test_tabfuncs test_args test_float16 test_numerical_recipes test_image test_backprojector)
+foreach(test_name IN ITEMS test_matrix1d test_matrix2d test_euler test_strings test_ctf test_metadata_table test_transformations test_projector test_fftw test_healpix_sampling test_symmetries test_funcs test_filename test_mask test_tabfuncs test_args test_float16 test_numerical_recipes test_image test_backprojector test_gravis_vectors test_gravis_matrices test_zernike test_optimization test_log test_zio test_macros test_memory test_parallel test_assembly test_local_symmetry test_helix)
     add_executable(${test_name}
         ${CMAKE_SOURCE_DIR}/tests/${test_name}.cpp
     )
@@ -78,8 +78,10 @@ if(COVERAGE)
 
     add_custom_target(coverage
         # 0. Ensure output directory exists and reset stale counters.
+        #    NOTE: lcov --zerocounters only deletes .da files (old format).
+        #    We must also delete .gcda files (new format) manually.
         COMMAND ${CMAKE_COMMAND} -E make_directory ${COVERAGE_DIR}
-        COMMAND ${LCOV_PATH} --zerocounters --directory ${CMAKE_BINARY_DIR}
+        COMMAND find ${CMAKE_BINARY_DIR} -name "*.gcda" -delete
 
         # 1. Run the non-MPI test binaries.
         COMMAND ${CMAKE_BINARY_DIR}/bin/test_multidim_array
@@ -103,6 +105,18 @@ if(COVERAGE)
         COMMAND ${CMAKE_BINARY_DIR}/bin/test_numerical_recipes
         COMMAND ${CMAKE_BINARY_DIR}/bin/test_image
         COMMAND ${CMAKE_BINARY_DIR}/bin/test_backprojector
+        COMMAND ${CMAKE_BINARY_DIR}/bin/test_gravis_vectors
+        COMMAND ${CMAKE_BINARY_DIR}/bin/test_gravis_matrices
+        COMMAND ${CMAKE_BINARY_DIR}/bin/test_zernike
+        COMMAND ${CMAKE_BINARY_DIR}/bin/test_optimization
+        COMMAND ${CMAKE_BINARY_DIR}/bin/test_log
+        COMMAND ${CMAKE_BINARY_DIR}/bin/test_zio
+        COMMAND ${CMAKE_BINARY_DIR}/bin/test_macros
+        COMMAND ${CMAKE_BINARY_DIR}/bin/test_memory
+        COMMAND ${CMAKE_BINARY_DIR}/bin/test_parallel
+        COMMAND ${CMAKE_BINARY_DIR}/bin/test_assembly
+        COMMAND ${CMAKE_BINARY_DIR}/bin/test_local_symmetry
+        COMMAND ${CMAKE_BINARY_DIR}/bin/test_helix
 
         # 2. Run the MPI test binary (requires mpirun; adjust -n as needed).
         COMMAND mpirun -n 2 ${CMAKE_BINARY_DIR}/bin/test_expectation_mpi
@@ -112,7 +126,7 @@ if(COVERAGE)
             --capture
             --directory ${CMAKE_BINARY_DIR}
             --output-file ${COVERAGE_INFO}
-            --ignore-errors mismatch,gcov
+            --ignore-errors mismatch,gcov,source
 
         # 4. Strip uninteresting paths: system headers, googletest internals,
         #    and the tests themselves (we want library coverage, not test coverage).
