@@ -1133,6 +1133,104 @@ TEST(DirectionalFilterTest, OutputSameSize)
 }
 
 // ---------------------------------------------------------------------------
+// getFourierReference (line 244)
+// ---------------------------------------------------------------------------
+
+TEST_F(FourierTransformerTest, GetFourierReference_ReturnsFourierData)
+{
+    // After FourierTransform the fFourier member is populated;
+    // getFourierReference returns a live reference to it.
+    FourierTransformer ft;
+    MultidimArray<RFLOAT> v;
+    v.resize(8);
+    v.initConstant(1.0);
+    ft.setReal(v);
+    ft.FourierTransform();   // zero-arg: transforms fReal → fFourier
+
+    MultidimArray<Complex>& ref = ft.getFourierReference();
+    EXPECT_GT(ref.nzyxdim, 0u);
+    // zero-arg FourierTransform normalises by N, so DC of all-ones = 8/8 = 1
+    EXPECT_NEAR(ref.data[0].real, 1.0, 1e-6);
+}
+
+// ---------------------------------------------------------------------------
+// CenterFFT invalid dimension (lines 673-674, active when !FAST_CENTERFFT)
+// ---------------------------------------------------------------------------
+
+TEST_F(CenterFFTTest, InvalidDim_Throws)
+{
+    // A default-constructed MultidimArray has XSIZE=0 → getDim()==0,
+    // which falls through to the else branch → REPORT_ERROR.
+    MultidimArray<RFLOAT> v;   // empty: getDim() == 0
+    EXPECT_THROW(CenterFFT(v, true), RelionError);
+}
+
+// ---------------------------------------------------------------------------
+// windowFourierTransform(in, out, newdim) — lines 813 and 837-838
+// ---------------------------------------------------------------------------
+
+TEST_F(WindowFourierTransformTest, NonSquareFT_Throws)
+{
+    // Shape check: YSIZE > 1 but YSIZE/2+1 != XSIZE → throws at line 813
+    // Use YSIZE=4, XSIZE=4 (correct would be XSIZE=3)
+    MultidimArray<Complex> ft, out;
+    ft.resize(1, 1, 4, 4);
+    ft.initZeros();
+    EXPECT_THROW(windowFourierTransform(ft, out, 4), RelionError);
+}
+
+TEST_F(WindowFourierTransformTest, ZeroDimFT_Throws)
+{
+    // Default-constructed array: XSIZE=0, getDim()==0 → hits default case at line 837-838
+    MultidimArray<Complex> ft, out;   // empty: getDim() == 0
+    EXPECT_THROW(windowFourierTransform(ft, out, 4), RelionError);
+}
+
+// ---------------------------------------------------------------------------
+// windowFourierTransform(V, newdim) in-place overload (lines 861-878)
+// ---------------------------------------------------------------------------
+
+TEST_F(WindowFourierTransformTest, InPlace_SameSize_EarlyReturn)
+{
+    // newdim matches existing dimensions → early return, data unchanged
+    MultidimArray<Complex> ft;
+    ft.resize(1, 1, 4, 3);   // YSIZE=4, XSIZE=3 (valid 2D FT shape for 4x4 real)
+    DIRECT_MULTIDIM_ELEM(ft, 0) = Complex(7.0, 0.0);
+
+    windowFourierTransform(ft, 4);   // newdim=4, newhdim=3 — same size
+
+    EXPECT_EQ(XSIZE(ft), 3);
+    EXPECT_EQ(YSIZE(ft), 4);
+    EXPECT_NEAR(DIRECT_MULTIDIM_ELEM(ft, 0).real, 7.0, 1e-9);  // unchanged
+}
+
+TEST_F(WindowFourierTransformTest, InPlace_Expand_Resizes)
+{
+    // newdim larger → calls two-arg version then moveFrom; result has new size
+    MultidimArray<Complex> ft;
+    ft.resize(1, 1, 4, 3);   // 2D FT for 4x4 real image
+    ft.initZeros();
+
+    windowFourierTransform(ft, 8);   // expand to 8x8 FT
+
+    EXPECT_EQ(XSIZE(ft), 5);   // 8/2+1
+    EXPECT_EQ(YSIZE(ft), 8);
+}
+
+TEST_F(WindowFourierTransformTest, InPlace_Shrink_Resizes)
+{
+    // newdim smaller → calls two-arg version then moveFrom; result has new size
+    MultidimArray<Complex> ft;
+    ft.resize(1, 1, 8, 5);   // 2D FT for 8x8 real image
+    ft.initZeros();
+
+    windowFourierTransform(ft, 4);   // shrink to 4x4 FT
+
+    EXPECT_EQ(XSIZE(ft), 3);   // 4/2+1
+    EXPECT_EQ(YSIZE(ft), 4);
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
